@@ -1,0 +1,17 @@
+[package]
+name = "comms-testkit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+comms-domain.workspace = true
+comms-provider-api.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+tokio.workspace = true

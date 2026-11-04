@@ -1,0 +1,25 @@
+[package]
+name = "comms-bootstrap"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+comms-app.workspace = true
+comms-auth.workspace = true
+comms-domain.workspace = true
+comms-provider-api.workspace = true
+comms-provider-msgraph.workspace = true
+comms-storage.workspace = true
+comms-testkit.workspace = true
+anyhow.workspace = true
+directories.workspace = true
+serde.workspace = true
+toml.workspace = true
+tokio.workspace = true
+tracing.workspace = true

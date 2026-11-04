@@ -1,0 +1,55 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+license = "Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+# internal
+comms-domain = { path = "crates/comms-domain" }
+comms-provider-api = { path = "crates/comms-provider-api" }
+comms-provider-msgraph = { path = "crates/comms-provider-msgraph" }
+comms-auth = { path = "crates/comms-auth" }
+comms-storage = { path = "crates/comms-storage" }
+comms-app = { path = "crates/comms-app" }
+comms-bootstrap = { path = "crates/comms-bootstrap" }
+comms-testkit = { path = "crates/comms-testkit" }
+
+# external
+anyhow = "1"
+async-trait = "0.1"
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+crossterm = { version = "0.29", features = ["event-stream"] }
+directories = "6"
+futures = "0.3"
+getrandom = "0.3"
+ratatui = "0.30"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "form"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sqlx = { version = "0.9", default-features = false, features = ["sqlite-bundled", "migrate", "macros", "runtime-tokio"] }
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "fs", "signal"] }
+toml = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "std"] }
+unicode-width = "0.2"
+url = "2"
+uuid = { version = "1", features = ["v7", "serde"] }
+wiremock = "0.6"
+tempfile = "3"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+dbg_macro = "warn"
