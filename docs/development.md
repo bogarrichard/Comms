@@ -8,6 +8,7 @@ cargo run -p comms-tui -- --demo
 ```
 
 * Rust stable ≥ 1.94 (set by `sqlx`). SQLite is bundled (FTS5 available); first build compiles it and needs a C compiler and cmake (rustls/aws-lc).
+* The Signal provider is tested against an in-memory fake `signal-cli` (`crates/comms-provider-signal/src/tests.rs`); no Signal account or `signal-cli` is needed.
 * Tests use `wiremock` for HTTP, `Store::open_in_memory`, and `comms-testkit::FakeProvider`. TUI tests render to ratatui's `TestBackend`.
 * `COMMS_CONFIG_DIR` / `COMMS_DATA_DIR` redirect config and cache; `COMMS_LOG=debug` raises the log level (log file, never the terminal).
 * Dependency policy: permissive licenses only (`deny.toml`). GPL/Slint licences are excluded until the GUI licensing decision.
@@ -15,7 +16,7 @@ cargo run -p comms-tui -- --demo
 
 ## Script tests
 
-`scripts/install.sh` and `scripts/configure.py` have their own tests (no network, nothing is built or installed; the shell test runs the real script against stub `git`/`cargo`/`curl`):
+`scripts/install.sh` and `scripts/configure.py` have their own tests. No network is used and nothing is built or installed: the shell test runs the real script with a PATH of stubs, where `curl` is a fake GitHub serving tarballs the test builds (so checksum, version lookup and failure paths are exercised for real). `INSTALL_SCRIPT=<file>` runs the tests against another copy, handy for checking that a deliberately broken installer is caught.
 
 ```bash
 python3 -m unittest discover -s tests/scripts -v
