@@ -6,6 +6,34 @@ use comms_provider_msgraph::scopes;
 use serde::Deserialize;
 
 /// How much of Teams channels to ask Microsoft for.
+/// Which messaging service to connect to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Backend {
+    #[default]
+    Teams,
+    Signal,
+}
+
+/// The `[signal]` table.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SignalSettings {
+    /// Your Signal phone number in international format, e.g. `+36201234567`.
+    pub account: Option<String>,
+    /// The `signal-cli` executable (name on PATH, or a full path).
+    pub cli_path: String,
+}
+
+impl Default for SignalSettings {
+    fn default() -> Self {
+        Self {
+            account: None,
+            cli_path: "signal-cli".to_owned(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ChannelAccess {
@@ -38,6 +66,9 @@ impl Default for PollSettings {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    /// `teams` (default) or `signal`.
+    pub provider: Backend,
+    pub signal: SignalSettings,
     /// Application (client) ID of your Entra app registration.
     pub client_id: Option<String>,
     /// `organizations`, `common` or a tenant ID/domain.
@@ -53,6 +84,8 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            provider: Backend::default(),
+            signal: SignalSettings::default(),
             client_id: None,
             tenant: "organizations".to_owned(),
             channels: ChannelAccess::Read,
@@ -68,6 +101,8 @@ pub struct Paths {
     pub config_file: PathBuf,
     pub database: PathBuf,
     pub log_file: PathBuf,
+    /// Signal messages received so far (signal-cli keeps no history).
+    pub signal_inbox: PathBuf,
 }
 
 impl Paths {
@@ -85,6 +120,7 @@ impl Paths {
             config_file: config_dir.join("config.toml"),
             database: data_dir.join("comms.db"),
             log_file: data_dir.join("comms.log"),
+            signal_inbox: data_dir.join("signal-inbox.jsonl"),
         })
     }
 }
@@ -112,6 +148,17 @@ impl Settings {
     }
 
     pub fn apply_env(&mut self, get: impl Fn(&str) -> Option<String>) {
+        match get("COMMS_PROVIDER")
+            .map(|v| v.trim().to_lowercase())
+            .as_deref()
+        {
+            Some("teams") => self.provider = Backend::Teams,
+            Some("signal") => self.provider = Backend::Signal,
+            _ => {}
+        }
+        if let Some(v) = get("COMMS_SIGNAL_ACCOUNT").filter(|v| !v.trim().is_empty()) {
+            self.signal.account = Some(v.trim().to_owned());
+        }
         if let Some(v) = get("COMMS_CLIENT_ID").filter(|v| !v.trim().is_empty()) {
             self.client_id = Some(v.trim().to_owned());
         }
@@ -174,6 +221,33 @@ mod tests {
         assert_eq!(s.poll.open_secs, 20);
         assert_eq!(s.poll.chats_secs, 60);
         assert_eq!(s.keys["quit"], ["q", "ctrl+c"]);
+    }
+
+    #[test]
+    fn provider_defaults_to_teams_and_signal_table_parses() {
+        assert_eq!(Settings::parse("").unwrap().provider, Backend::Teams);
+        let s = Settings::parse(
+            "provider = \"signal\"\n[signal]\naccount = \"+36201234567\"\ncli_path = \"/opt/signal-cli\"",
+        )
+        .unwrap();
+        assert_eq!(s.provider, Backend::Signal);
+        assert_eq!(s.signal.account.as_deref(), Some("+36201234567"));
+        assert_eq!(s.signal.cli_path, "/opt/signal-cli");
+        assert_eq!(Settings::parse("").unwrap().signal.cli_path, "signal-cli");
+        assert!(Settings::parse("provider = \"irc\"").is_err());
+        assert!(Settings::parse("[signal]\nacount = \"x\"").is_err());
+    }
+
+    #[test]
+    fn environment_can_select_signal() {
+        let mut s = Settings::default();
+        s.apply_env(|k| match k {
+            "COMMS_PROVIDER" => Some(" Signal ".into()),
+            "COMMS_SIGNAL_ACCOUNT" => Some("+3611".into()),
+            _ => None,
+        });
+        assert_eq!(s.provider, Backend::Signal);
+        assert_eq!(s.signal.account.as_deref(), Some("+3611"));
     }
 
     #[test]

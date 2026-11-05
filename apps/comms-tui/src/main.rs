@@ -4,6 +4,7 @@ mod app;
 mod input;
 mod keys;
 mod render;
+mod theme;
 mod ui;
 
 #[cfg(test)]
@@ -14,7 +15,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use comms_app::AppHandle;
-use comms_bootstrap::{Paths, Settings};
+use comms_bootstrap::{Backend, Paths, Settings};
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste, Event, EventStream};
 use futures::StreamExt;
 use tokio::sync::broadcast::error::RecvError;
@@ -23,19 +24,21 @@ use crate::app::App;
 use crate::keys::KeyMap;
 
 const HELP: &str = "\
-comms — a fast terminal client for Microsoft Teams chats and channels
+comms — a fast terminal client for Microsoft Teams and Signal
 
 USAGE:
     comms                     start the client
     comms --demo              try the interface with fake data (no account needed)
     comms login               sign in with your browser
     comms login --device-code sign in with a code (for SSH / no browser)
+    comms signal-link         link this computer to your Signal account (needs signal-cli)
     comms logout [--wipe-cache]
                               forget the stored sign-in (and delete cached messages)
     comms paths               show where config, cache and logs live
     comms --version | --help
 
-Configuration: see docs/setup-entra.md. Press ? inside the client for key bindings.";
+Teams: see docs/setup-entra.md.  Signal: see docs/signal.md (set provider = signal).
+Press ? inside the client for key bindings.";
 
 #[tokio::main]
 async fn main() {
@@ -69,9 +72,22 @@ async fn run() -> Result<()> {
         }
         Some("login") => {
             let settings = Settings::load()?;
+            if settings.provider == Backend::Signal {
+                bail!("Signal does not use `login`; run `comms signal-link` instead.");
+            }
             let session = comms_bootstrap::make_session(&settings)?;
             comms_bootstrap::login(&session, has("--device-code"), |s| println!("{s}")).await?;
             println!("Signed in. Start the client with `comms`.");
+            return Ok(());
+        }
+        Some("signal-link") => {
+            let settings = Settings::load()?;
+            println!("Linking to your Signal account with signal-cli...");
+            comms_bootstrap::signal_link(&settings, |s| println!("{s}")).await?;
+            println!(
+                "\nLinked. Now set your number in {}:\n\n    provider = \"signal\"\n    [signal]\n    account = \"+36...\"\n\nthen start `comms`.",
+                Paths::discover()?.config_file.display()
+            );
             return Ok(());
         }
         Some("logout") => {
@@ -92,6 +108,8 @@ async fn run() -> Result<()> {
 
     let handle: AppHandle = if has("--demo") {
         comms_bootstrap::start_demo().await?
+    } else if settings.provider == Backend::Signal {
+        comms_bootstrap::start_signal(&settings).await?
     } else {
         let session = comms_bootstrap::make_session(&settings)?;
         if !session

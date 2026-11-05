@@ -36,6 +36,7 @@ struct State {
 }
 
 pub struct FakeProvider {
+    kind: &'static str,
     me: Participant,
     state: Mutex<State>,
     latency: Duration,
@@ -93,11 +94,18 @@ impl FakeProvider {
         Self {
             me: person("me", "Alex Demo"),
             state: Mutex::new(State::default()),
+            kind: "fake",
             latency: Duration::ZERO,
             send_calls: AtomicUsize::new(0),
             list_calls: AtomicUsize::new(0),
             message_calls: AtomicUsize::new(0),
         }
+    }
+
+    /// Pretend to be another backend (the UI colours conversations per backend).
+    pub fn with_kind(mut self, kind: &'static str) -> Self {
+        self.kind = kind;
+        self
     }
 
     pub fn with_latency(mut self, latency: Duration) -> Self {
@@ -297,7 +305,7 @@ impl FakeProvider {
 #[async_trait]
 impl MessagingProvider for FakeProvider {
     fn kind(&self) -> ProviderKind {
-        ProviderKind::new("fake")
+        ProviderKind::new(self.kind)
     }
 
     fn capabilities(&self) -> Capabilities {

@@ -10,6 +10,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::input::InputBuffer;
 use crate::keys::{Action, KeyMap};
+use crate::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -66,6 +67,7 @@ pub struct Toast {
 
 pub struct App {
     pub handle: AppHandle,
+    pub theme: Theme,
     pub keymap: KeyMap,
     pub convs: Vec<Conversation>,
     pub filter: Filter,
@@ -97,8 +99,10 @@ const INITIAL_VIEW: u32 = 300;
 impl App {
     pub async fn new(handle: AppHandle, keymap: KeyMap) -> Self {
         let connection = handle.connection_status();
+        let theme = Theme::for_provider(handle.provider_kind().as_str());
         let mut app = Self {
             handle,
+            theme,
             keymap,
             convs: vec![],
             filter: Filter::All,

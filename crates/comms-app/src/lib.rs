@@ -151,6 +151,11 @@ impl AppHandle {
         self.inner.events.subscribe()
     }
 
+    /// Which backend this handle talks to (e.g. `"msgraph"`, `"signal"`, `"fake"`).
+    pub fn provider_kind(&self) -> comms_domain::ProviderKind {
+        self.inner.provider.kind()
+    }
+
     pub fn capabilities(&self) -> Capabilities {
         self.inner.provider.capabilities()
     }

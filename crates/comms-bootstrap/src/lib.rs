@@ -14,10 +14,11 @@ use comms_app::{AppHandle, CoreConfig};
 use comms_auth::{AuthConfig, AuthError, DeviceCodePrompt, KeyringStore, Session};
 use comms_provider_api::ProviderError;
 use comms_provider_msgraph::{AccessTokenSource, MsGraphProvider};
+use comms_provider_signal::{SignalConfig, SignalProvider};
 use comms_storage::Store;
 use comms_testkit::FakeProvider;
 
-pub use settings::{ChannelAccess, Paths, Settings};
+pub use settings::{Backend, ChannelAccess, Paths, Settings, SignalSettings};
 
 /// Adapts the auth session to what the Graph client needs.
 struct SessionTokens(Arc<Session>);
@@ -144,6 +145,45 @@ pub async fn start_graph(settings: &Settings, session: Arc<Session>) -> Result<A
     Ok(AppHandle::start(Arc::new(provider), store, core_config(settings)).await?)
 }
 
+/// A valid-looking international phone number (`+` and 7 to 15 digits).
+pub fn valid_signal_account(s: &str) -> bool {
+    let digits = s.strip_prefix('+').unwrap_or("");
+    (7..=15).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// The Signal backend. Needs `signal-cli` with the account already linked
+/// (see [`signal_link`]).
+pub async fn start_signal(settings: &Settings) -> Result<AppHandle> {
+    let Some(account) = settings.signal.account.clone() else {
+        bail!(
+            "no Signal account configured.\n\
+             Set `account = \"+36...\"` in the [signal] section of {} \
+             (or COMMS_SIGNAL_ACCOUNT), and link it first with `comms signal-link`.",
+            Paths::discover()?.config_file.display()
+        );
+    };
+    if !valid_signal_account(&account) {
+        bail!("signal.account must look like +36201234567 (international format), got `{account}`");
+    }
+    let paths = Paths::discover()?;
+    let store = Store::open(&paths.database)
+        .await
+        .context("opening the local database")?;
+    let provider = SignalProvider::connect(SignalConfig {
+        account,
+        cli_path: settings.signal.cli_path.clone(),
+        inbox_file: Some(paths.signal_inbox),
+    })
+    .await?;
+    Ok(AppHandle::start(Arc::new(provider), store, core_config(settings)).await?)
+}
+
+/// Link this computer to your Signal account as a secondary device.
+pub async fn signal_link(settings: &Settings, say: impl Fn(&str)) -> Result<()> {
+    comms_provider_signal::link(&settings.signal.cli_path, "comms", say).await?;
+    Ok(())
+}
+
 /// A self-contained demo: fake data, in-memory storage, no network or credentials.
 pub async fn start_demo() -> Result<AppHandle> {
     let store = Store::open_in_memory().await?;
@@ -160,7 +200,7 @@ pub async fn start_demo() -> Result<AppHandle> {
 /// Sign out and optionally delete the local message cache.
 pub async fn logout(settings: &Settings, wipe_cache: bool) -> Result<Vec<String>> {
     let mut done = Vec::new();
-    if settings.client_id.is_some() {
+    if settings.provider == Backend::Teams && settings.client_id.is_some() {
         let session = make_session(settings)?;
         session.logout().await.map_err(explain_auth_error)?;
         done.push("Removed the stored sign-in from the system keyring.".to_owned());
@@ -178,6 +218,11 @@ pub async fn logout(settings: &Settings, wipe_cache: bool) -> Result<Vec<String>
             "Deleted the local message cache ({}).",
             paths.database.display()
         ));
+        if paths.signal_inbox.exists() {
+            std::fs::remove_file(&paths.signal_inbox)
+                .with_context(|| format!("deleting {}", paths.signal_inbox.display()))?;
+            done.push("Deleted the stored Signal messages.".to_owned());
+        }
     }
     Ok(done)
 }
@@ -205,6 +250,45 @@ mod tests {
         }
         assert!(h.capabilities().channels);
         assert_ne!(h.connection_status(), ConnectionStatus::AuthRequired);
+    }
+
+    #[test]
+    fn signal_account_validation() {
+        for ok in ["+36201234567", "+1234567"] {
+            assert!(valid_signal_account(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "36201234567",
+            "+",
+            "+12",
+            "+36 20 123",
+            "+36a01234567",
+            "+1234567890123456",
+        ] {
+            assert!(!valid_signal_account(bad), "{bad}");
+        }
+    }
+
+    #[tokio::test]
+    async fn starting_signal_without_an_account_explains_what_to_do() {
+        let err = start_signal(&Settings::default())
+            .await
+            .map(|_| ())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("signal-link") && err.contains("account"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn starting_signal_with_a_malformed_account_is_rejected() {
+        let mut s = Settings::default();
+        s.signal.account = Some("0620 123".into());
+        let err = start_signal(&s).await.map(|_| ()).unwrap_err().to_string();
+        assert!(err.contains("+36201234567"), "{err}");
     }
 
     #[test]

@@ -7,16 +7,18 @@ apps/comms-tui ──► comms-bootstrap ──► comms-app ──► comms-sto
                          │               ▼           comms-domain
                          ├──► comms-provider-api ◄── comms-testkit (fake provider / demo)
                          ├──► comms-provider-msgraph  (the only crate that knows Graph)
+                         ├──► comms-provider-signal   (the only crate that knows signal-cli)
                          └──► comms-auth              (OAuth2 PKCE / device code, keyring)
 ```
 
 * **comms-domain** – typed ids (UUIDv7 internally, opaque `RemoteId` from providers), `Conversation`, `Message`, structural `ContentBlock`s. No provider types.
 * **comms-provider-api** – `MessagingProvider` trait, `Capabilities`, paging, `ProviderError` with `request_not_applied()` (is a retry provably safe?).
 * **comms-provider-msgraph** – documented v1.0 delegated endpoints, HTML→`ContentBlock`, throttling (`Retry-After`, backoff), pagination links restricted to the Graph host.
+* **comms-provider-signal** – talks JSON-RPC to a `signal-cli jsonRpc` child process (no Signal protocol code or AGPL dependency is linked in). Signal pushes messages and keeps no history for linked devices, while the core polls, so the crate buffers what it receives (`inbox.rs`, also appended to a private file) and serves it through `get_messages`. A `send` that gets an error answer is `failed` (safe to retry); no answer is `uncertain`.
 * **comms-storage** – schema/migrations, duplicate prevention by `(conversation, remote_id)`, edit/delete updates, adoption of locally-sent messages whose outcome was uncertain.
 * **comms-app** – the engine. Frontends send `Command`s, subscribe to `AppEvent`s, and read from the local cache via `AppHandle` queries. Polling, pagination/backfill and the send state machine live here.
 * **comms-bootstrap** – settings, paths, builds Graph or demo backends.
-* **comms-tui** – rendering and keys only.
+* **comms-tui** – rendering and keys only. `theme.rs` gives each backend an accent colour (Signal blue, Teams purple) chosen from `AppHandle::provider_kind()`.
 
 ## Sharing the core between Ratatui and Slint
 

@@ -15,6 +15,7 @@ comms-auth.workspace = true
 comms-domain.workspace = true
 comms-provider-api.workspace = true
 comms-provider-msgraph.workspace = true
+comms-provider-signal.workspace = true
 comms-storage.workspace = true
 comms-testkit.workspace = true
 anyhow.workspace = true

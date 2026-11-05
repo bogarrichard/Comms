@@ -38,9 +38,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 }
 
-fn border(focused: bool) -> Style {
+fn border(app: &App, focused: bool) -> Style {
     Style::new().fg(if focused {
-        Color::Cyan
+        app.theme.accent
     } else {
         Color::DarkGray
     })
@@ -84,8 +84,16 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Sidebar && app.mode != Mode::Compose;
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(border(focused))
-        .title(format!(" Comms · {} ", app.filter.label()));
+        .border_style(border(app, focused))
+        .title(Line::from(vec![
+            Span::styled(
+                format!(" {}", app.theme.name),
+                Style::new()
+                    .fg(app.theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(format!(" · {} ", app.filter.label())),
+        ]));
     let inner = block.inner(area);
     f.render_widget(block, area);
     if inner.height == 0 || inner.width == 0 {
@@ -115,7 +123,7 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
                 style = style.add_modifier(Modifier::BOLD);
             }
             if Some(c.id) == open_id {
-                style = style.fg(Color::Cyan);
+                style = style.fg(app.theme.accent);
             }
             let label = truncate(
                 &format!("{} {}", kind_icon(c.kind), conv_label(c)),
@@ -175,7 +183,7 @@ fn name_color(name: &str) -> Color {
     PALETTE[h % PALETTE.len()]
 }
 
-fn message_lines(msgs: &[Message], width: usize) -> Vec<Line<'static>> {
+fn message_lines(msgs: &[Message], width: usize, accent: Color) -> Vec<Line<'static>> {
     let mut out: Vec<Line<'static>> = Vec::new();
     let mut last_day: Option<NaiveDate> = None;
     let body_w = width.saturating_sub(2).max(1);
@@ -195,7 +203,7 @@ fn message_lines(msgs: &[Message], width: usize) -> Vec<Line<'static>> {
             );
         }
         let name_style = if m.is_mine {
-            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            Style::new().fg(accent).add_modifier(Modifier::BOLD)
         } else {
             Style::new()
                 .fg(name_color(&m.sender.display_name))
@@ -314,7 +322,7 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Messages && !composing;
     let mut block = Block::default()
         .borders(Borders::ALL)
-        .border_style(border(focused));
+        .border_style(border(app, focused));
     if app.has_older && app.open.is_some() {
         block = block.title(format!(
             " ▲ older messages available ({}) ",
@@ -344,7 +352,7 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
                 inner,
             );
         } else {
-            let lines = message_lines(&app.messages, inner.width as usize);
+            let lines = message_lines(&app.messages, inner.width as usize, app.theme.accent);
             let h = inner.height as usize;
             app.max_scroll = lines.len().saturating_sub(h);
             app.scroll = app.scroll.min(app.max_scroll);
@@ -381,7 +389,7 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
     };
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(border(composing))
+        .border_style(border(app, composing))
         .title(title);
     let inner = block.inner(input);
     f.render_widget(block, input);
@@ -407,10 +415,10 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let (badge, color) = match app.mode {
-        Mode::Normal => (" NORMAL ", Color::Blue),
+        Mode::Normal => (" NORMAL ", app.theme.accent),
         Mode::Compose => (" INSERT ", Color::Green),
         Mode::Search => (" SEARCH ", Color::Yellow),
-        Mode::Help => (" HELP ", Color::Magenta),
+        Mode::Help => (" HELP ", Color::Cyan),
     };
     let conn = match &app.connection {
         ConnectionStatus::Online => Span::styled("● online", Style::new().fg(Color::Green)),
@@ -432,7 +440,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         " "
     };
     let right = Line::from(vec![
-        Span::styled(spin, Style::new().fg(Color::Cyan)),
+        Span::styled(spin, Style::new().fg(app.theme.accent)),
         Span::raw(" "),
         conn,
         Span::raw(" "),
@@ -457,7 +465,11 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     match &app.toast {
         Some(t) => left.push(Span::styled(
             t.text.clone(),
-            Style::new().fg(if t.error { Color::Red } else { Color::Cyan }),
+            Style::new().fg(if t.error {
+                Color::Red
+            } else {
+                app.theme.accent
+            }),
         )),
         None => left.push(Span::styled(
             format!(
@@ -526,7 +538,7 @@ fn draw_help(f: &mut Frame, app: &App, area: Rect) {
             Block::default()
                 .borders(Borders::ALL)
                 .title(" Keys ")
-                .border_style(border(true)),
+                .border_style(border(app, true)),
         ),
         popup,
     );

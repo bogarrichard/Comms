@@ -19,6 +19,37 @@ async fn demo_app() -> App {
     app
 }
 
+async fn app_for(kind: &'static str) -> App {
+    let store = comms_storage::Store::open_in_memory().await.unwrap();
+    let provider = comms_testkit::FakeProvider::demo().with_kind(kind);
+    let handle = comms_app::AppHandle::start(
+        std::sync::Arc::new(provider),
+        store,
+        comms_app::CoreConfig::default(),
+    )
+    .await
+    .unwrap();
+    let mut app = App::new(handle, KeyMap::default_map()).await;
+    settle(&mut app, |a| a.convs.len() >= 7).await;
+    app
+}
+
+/// Foreground colours of every cell on the row that contains `needle`.
+fn row_colours(app: &mut App, needle: &str) -> Vec<ratatui::style::Color> {
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    term.draw(|f| ui::draw(f, app)).unwrap();
+    let buf = term.backend().buffer().clone();
+    for y in 0..buf.area.height {
+        let row: String = (0..buf.area.width)
+            .map(|x| buf[(x, y)].symbol().to_owned())
+            .collect();
+        if row.contains(needle) {
+            return (0..buf.area.width).map(|x| buf[(x, y)].fg).collect();
+        }
+    }
+    panic!("no row containing {needle:?}");
+}
+
 /// Pump core events into the app until `done` holds.
 async fn settle(app: &mut App, done: impl Fn(&App) -> bool) {
     let mut rx = app.handle.subscribe();
@@ -72,7 +103,7 @@ fn screen(app: &mut App, w: u16, h: u16) -> String {
 async fn conversation_list_shows_chats_then_channels_with_unread_marker() {
     let mut app = demo_app().await;
     let s = screen(&mut app, 100, 30);
-    assert!(s.contains("Comms · All"), "{s}");
+    assert!(s.contains("Teams · All"), "{s}");
     assert!(s.contains("● › Anna Kovács"), "unread chat is marked:\n{s}");
     assert!(s.contains("» Study group"), "{s}");
     assert!(s.contains("# General · Software Engi"), "{s}");
@@ -167,12 +198,12 @@ async fn filter_cycles_and_search_narrows_the_list() {
     app.on_key(code(KeyCode::Tab)).await;
     let s = screen(&mut app, 100, 30);
     assert!(
-        s.contains("Comms · Chats") && !s.contains("# General"),
+        s.contains("Teams · Chats") && !s.contains("# General"),
         "{s}"
     );
     app.on_key(code(KeyCode::Tab)).await;
     let s = screen(&mut app, 100, 30);
-    assert!(s.contains("Comms · Channels") && !s.contains("Anna"), "{s}");
+    assert!(s.contains("Teams · Channels") && !s.contains("Anna"), "{s}");
     app.on_key(code(KeyCode::Tab)).await;
 
     app.on_key(key('/')).await;
@@ -352,4 +383,56 @@ async fn bracketed_paste_goes_into_the_composer() {
     app.on_key(key('i')).await;
     app.on_paste("line one\nline two").await;
     assert_eq!(app.input.text(), "line one\nline two");
+}
+
+// ------------------------------------------------------------- per-service colour
+
+#[tokio::test]
+async fn signal_is_blue_and_teams_is_purple() {
+    use crate::theme::Theme;
+    let mut signal = app_for("signal").await;
+    let mut teams = app_for("msgraph").await;
+    assert_eq!(signal.theme, Theme::SIGNAL);
+    assert_eq!(teams.theme, Theme::TEAMS);
+
+    // The service name in the sidebar title is drawn in the accent colour.
+    let title = row_colours(&mut signal, "Signal · All");
+    assert!(title.contains(&Theme::SIGNAL.accent), "{title:?}");
+    assert!(!title.contains(&Theme::TEAMS.accent));
+    let title = row_colours(&mut teams, "Teams · All");
+    assert!(title.contains(&Theme::TEAMS.accent), "{title:?}");
+    assert!(!title.contains(&Theme::SIGNAL.accent));
+}
+
+#[tokio::test]
+async fn status_badge_and_focus_border_follow_the_accent() {
+    use crate::theme::Theme;
+    let mut app = app_for("signal").await;
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    term.draw(|f| ui::draw(f, &mut app)).unwrap();
+    let buf = term.backend().buffer().clone();
+    // NORMAL badge: accent background on the last row.
+    let last = buf.area.height - 1;
+    let badge = (0..buf.area.width)
+        .map(|x| &buf[(x, last)])
+        .find(|c| c.symbol() == "N");
+    assert_eq!(badge.map(|c| c.bg), Some(Theme::SIGNAL.accent));
+    // Focused sidebar border (top-left corner) uses the accent.
+    assert_eq!(buf[(0, 0)].fg, Theme::SIGNAL.accent);
+}
+
+#[tokio::test]
+async fn the_demo_keeps_the_teams_look_and_names_the_service() {
+    let mut app = demo_app().await;
+    let s = screen(&mut app, 100, 30);
+    assert!(s.contains("Teams · All"), "{s}");
+    assert_eq!(app.theme, crate::theme::Theme::TEAMS);
+}
+
+#[tokio::test]
+async fn unknown_backends_fall_back_to_the_neutral_look() {
+    let mut app = app_for("irc").await;
+    assert_eq!(app.theme, crate::theme::Theme::DEFAULT);
+    let s = screen(&mut app, 100, 30);
+    assert!(s.contains("Comms · All"), "{s}");
 }
