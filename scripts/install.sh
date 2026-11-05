@@ -70,10 +70,11 @@ install_binary() {
   have tar || die "tar is required"
   have mktemp || die "mktemp is required"
 
+  # GitHub occasionally answers 5xx; the curl calls below retry those before giving up.
   tag="${COMMS_VERSION:-}"
   if [ -z "$tag" ]; then
     # /releases/latest redirects to /releases/tag/<tag>; no API token or jq needed.
-    final=$(curl --proto '=https' --tlsv1.2 -fsSL -o /dev/null -w '%{url_effective}' "$REPO/releases/latest") ||
+    final=$(curl --proto '=https' --tlsv1.2 --retry 4 --retry-delay 2 -fsSL -o /dev/null -w '%{url_effective}' "$REPO/releases/latest") ||
       die "could not look up the latest release of $REPO"
     tag=${final##*/}
   fi
@@ -88,9 +89,9 @@ install_binary() {
   trap 'rm -rf "$work"' EXIT INT TERM
 
   say "downloading $name"
-  curl --proto '=https' --tlsv1.2 -fsSL -o "$work/$name.tar.gz" "$base/$name.tar.gz" ||
+  curl --proto '=https' --tlsv1.2 --retry 4 --retry-delay 2 -fsSL -o "$work/$name.tar.gz" "$base/$name.tar.gz" ||
     die "download failed: $base/$name.tar.gz (does release $tag exist? try COMMS_FROM_SOURCE=1)"
-  curl --proto '=https' --tlsv1.2 -fsSL -o "$work/$name.tar.gz.sha256" "$base/$name.tar.gz.sha256" ||
+  curl --proto '=https' --tlsv1.2 --retry 4 --retry-delay 2 -fsSL -o "$work/$name.tar.gz.sha256" "$base/$name.tar.gz.sha256" ||
     die "download failed: $base/$name.tar.gz.sha256"
 
   want=$(cut -d' ' -f1 <"$work/$name.tar.gz.sha256")

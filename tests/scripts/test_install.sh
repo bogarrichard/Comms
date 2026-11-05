@@ -57,11 +57,12 @@ exit 0'
 # $FAKE_SB/releases/<tag>/<file>, and https://sh.rustup.rs serves $FAKE_SB/rustup.sh.
 stub_curl() {
   stub curl 'out=""; wfmt=""; url=""
+echo "$*" >>"$FAKE_SB/curl.args"
 while [ $# -gt 0 ]; do
   case "$1" in
     -o) out=$2; shift ;;
     -w) wfmt=$2; shift ;;
-    --proto) shift ;;
+    --proto | --retry | --retry-delay) shift ;;
     -*) ;;
     *) url=$1 ;;
   esac
@@ -160,6 +161,7 @@ if "$SB/home/.local/bin/comms" --version | grep -q "comms v1.2.3"; then ok "the 
 expect_file "keeps the setup scripts for later" "$SB/home/.local/share/comms/scripts/configure.py"
 expect_curl "looks up the latest tag" "/releases/latest"
 expect_curl "downloads the archive for this platform" "/releases/download/v1.2.3/comms-v1.2.3-$TARGET.tar.gz$"
+if grep -q -- "--retry" "$SB/curl.args" && ! grep -v -- "--retry" "$SB/curl.args" | grep -q .; then ok "every release request retries transient errors"; else bad "every release request retries transient errors" "$(cat "$SB/curl.args")"; fi
 expect_curl "downloads the checksum" "/releases/download/v1.2.3/comms-v1.2.3-$TARGET.tar.gz.sha256$"
 expect_out "says what was installed" "installed comms v1.2.3"
 expect_out "points at configure.py" "configure.py"
