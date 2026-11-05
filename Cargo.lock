@@ -522,6 +522,7 @@ name = "comms-bootstrap"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "comms-app",
  "comms-auth",
  "comms-domain",

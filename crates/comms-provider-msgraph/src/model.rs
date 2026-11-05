@@ -229,7 +229,7 @@ pub fn map_messages(items: &[GMessage]) -> Vec<RemoteMessage> {
         .flat_map(|m| std::iter::once(m).chain(m.replies.iter()))
         .filter_map(map_message)
         .collect();
-    out.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    out.sort_by_key(|m| std::cmp::Reverse(m.timestamp));
     out
 }
 

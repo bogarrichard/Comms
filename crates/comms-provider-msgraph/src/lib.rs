@@ -55,6 +55,7 @@ pub mod scopes {
 pub struct MsGraphProvider {
     client: GraphClient,
     me: OnceCell<Participant>,
+    channels: bool,
 }
 
 #[derive(Serialize)]
@@ -94,17 +95,21 @@ impl MsGraphProvider {
         base: &str,
         tokens: Arc<dyn AccessTokenSource>,
     ) -> Result<Self, ProviderError> {
-        Ok(Self {
-            client: GraphClient::new(base, tokens)?,
-            me: OnceCell::new(),
-        })
+        Ok(Self::with_client(GraphClient::new(base, tokens)?))
     }
 
     pub fn with_client(client: GraphClient) -> Self {
         Self {
             client,
             me: OnceCell::new(),
+            channels: true,
         }
+    }
+
+    /// Enable or disable teams/channels (off when the permissions were not requested).
+    pub fn with_channels(mut self, enabled: bool) -> Self {
+        self.channels = enabled;
+        self
     }
 
     async fn me(&self) -> Result<&Participant, ProviderError> {
@@ -263,7 +268,7 @@ impl MessagingProvider for MsGraphProvider {
         Capabilities {
             direct_messages: true,
             group_conversations: true,
-            channels: true,
+            channels: self.channels,
             attachments: false,
             threads: false,
             // Delegated clients cannot receive change notifications without a

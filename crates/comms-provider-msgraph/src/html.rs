@@ -95,11 +95,10 @@ impl Builder {
             text: prev,
             style: prev_style,
         }) = self.inlines.last_mut()
+            && *prev_style == style
         {
-            if *prev_style == style {
-                prev.push_str(&text);
-                return;
-            }
+            prev.push_str(&text);
+            return;
         }
         self.inlines.push(Inline::Text { text, style });
     }
@@ -255,10 +254,10 @@ impl Builder {
                 }
             }
             "code" => {
-                if let Some(text) = self.code.take() {
-                    if !text.is_empty() {
-                        self.push_inline(Inline::Code { text });
-                    }
+                if let Some(text) = self.code.take()
+                    && !text.is_empty()
+                {
+                    self.push_inline(Inline::Code { text });
                 }
             }
             "pre" => {

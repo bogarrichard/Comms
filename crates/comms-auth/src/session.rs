@@ -98,10 +98,10 @@ impl Session {
     /// when the cached one is close to expiry. Concurrent callers share one refresh.
     pub async fn access_token(&self) -> Result<String, AuthError> {
         let mut cache = self.cache.lock().await;
-        if let Some(c) = cache.as_ref() {
-            if c.expires_at - chrono::Duration::minutes(2) > Utc::now() {
-                return Ok(c.token.clone());
-            }
+        if let Some(c) = cache.as_ref()
+            && c.expires_at - chrono::Duration::minutes(2) > Utc::now()
+        {
+            return Ok(c.token.clone());
         }
         let stored = self.store.load().await?.ok_or(AuthError::NotSignedIn)?;
         if stored.scopes != normalise_scopes(&self.cfg.scopes) {
