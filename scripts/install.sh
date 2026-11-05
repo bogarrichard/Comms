@@ -34,12 +34,14 @@ have cc || have gcc || die "a C compiler is required (e.g. sudo apt install buil
 have cmake || die "cmake is required (e.g. sudo apt install cmake)"
 
 # Rust toolchain.
+# shellcheck source=/dev/null
 if ! have cargo && [ -r "$HOME/.cargo/env" ]; then . "$HOME/.cargo/env"; fi
 if ! have cargo; then
   confirm "cargo not found. Install Rust via rustup (https://sh.rustup.rs)?" ||
     die "cargo is required; install Rust from https://rustup.rs and re-run"
   have curl || die "curl is required to install rustup"
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  # shellcheck source=/dev/null
   . "$HOME/.cargo/env"
 fi
 
