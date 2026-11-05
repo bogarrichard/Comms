@@ -3,6 +3,9 @@
 # stub tools (git, cc, cmake, cargo, curl, uname), so nothing is built or downloaded.
 #
 #   sh tests/scripts/test_install.sh
+# The stubs are written from single-quoted strings on purpose: their $variables must
+# expand when the stub runs, not when it is created.
+# shellcheck disable=SC2016
 set -u
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
