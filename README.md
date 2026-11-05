@@ -13,10 +13,11 @@ cargo run -p comms-tui -- --demo
 ## Use it with Teams
 
 1. Register an Entra app (5 minutes): [docs/setup-entra.md](docs/setup-entra.md)
-2. Put the client ID in `~/.config/comms/config.toml` (or `COMMS_CLIENT_ID`):
-   ```toml
-   client_id = "00000000-0000-0000-0000-000000000000"
+2. Run the setup questionnaire (creates or updates `~/.config/comms/config.toml`; it can start the browser sign-in at the end):
+   ```bash
+   python3 scripts/configure.py
    ```
+   Or edit the file by hand: `client_id = "00000000-0000-0000-0000-000000000000"` (also settable via `COMMS_CLIENT_ID`).
 3. `cargo run -p comms-tui -- login` (browser) or `... login --device-code` (SSH)
 4. `cargo run -p comms-tui`
 
