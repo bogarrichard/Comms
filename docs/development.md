@@ -12,3 +12,21 @@ cargo run -p comms-tui -- --demo
 * `COMMS_CONFIG_DIR` / `COMMS_DATA_DIR` redirect config and cache; `COMMS_LOG=debug` raises the log level (log file, never the terminal).
 * Dependency policy: permissive licenses only (`deny.toml`). GPL/Slint licences are excluded until the GUI licensing decision.
 * Live integration testing against a real tenant is manual for now: `comms login`, then use the client. An automated `--features live-graph` suite is future work.
+
+## Script tests
+
+`scripts/install.sh` and `scripts/configure.py` have their own tests (no network, nothing is built or installed; the shell test runs the real script against stub `git`/`cargo`/`curl`):
+
+```bash
+python3 -m unittest discover -s tests/scripts -v
+sh tests/scripts/test_install.sh
+shellcheck -s sh scripts/install.sh      # if shellcheck is installed
+```
+
+## Releasing
+
+1. Make sure `main` is green (CI runs the Rust checks on Linux/Windows/macOS and the script tests on Linux/macOS).
+2. Set `version` in `[workspace.package]` of `Cargo.toml` (SemVer; `0.x` minors may break), run `cargo build` so `Cargo.lock` follows, and commit it as `chore(release): vX.Y.Z`.
+3. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+
+The `Release` workflow then checks the tag equals the Cargo version, re-runs the tests, builds `comms` for Linux x86_64, macOS arm64 and Windows x86_64, smoke-tests `comms --version`, and publishes a GitHub release with the archives and `.sha256` files. A tag with a suffix (`v0.2.0-rc.1`) is published as a pre-release. Users can also install a tag from source: `COMMS_REF=v0.1.0 sh scripts/install.sh`.
