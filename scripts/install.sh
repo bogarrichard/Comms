@@ -105,8 +105,10 @@ install_binary() {
 
   mkdir -p "$BIN_DIR" || die "cannot create $BIN_DIR"
   # Copy under a temporary name, then rename: safe even while an old comms is running.
-  cp "$src/comms" "$BIN_DIR/.comms.new" && mv -f "$BIN_DIR/.comms.new" "$BIN_DIR/comms" ||
+  if ! cp "$src/comms" "$BIN_DIR/.comms.new" || ! mv -f "$BIN_DIR/.comms.new" "$BIN_DIR/comms"; then
+    rm -f "$BIN_DIR/.comms.new"
     die "cannot write to $BIN_DIR"
+  fi
   if [ -d "$src/scripts" ]; then
     mkdir -p "$DATA_DIR"
     rm -rf "$DATA_DIR/scripts"
