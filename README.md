@@ -4,6 +4,8 @@ A fast, keyboard-driven, native terminal client for **Microsoft Teams** (chats a
 
 > **Status: early.** The TUI works end to end against mocked Microsoft Graph responses and a built-in demo backend. It has **not yet been run against a live tenant** — your first sign-in is the first live test. See [Known limitations](#known-limitations).
 
+Documentation: <https://bogarrichard.github.io/Comms/> (sources in [`docs/`](docs/), built with Sphinx).
+
 ## Install
 
 ```bash

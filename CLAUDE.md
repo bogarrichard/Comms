@@ -14,3 +14,5 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
+
+If a commit touches `docs/` (Sphinx, see `docs/development.md`), the `.githooks/pre-commit` hook builds the docs with warnings as errors; enable it with `git config core.hooksPath .githooks`.

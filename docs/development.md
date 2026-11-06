@@ -24,6 +24,22 @@ sh tests/scripts/test_install.sh
 shellcheck -s sh scripts/install.sh      # if shellcheck is installed
 ```
 
+## Documentation
+
+The docs are [Sphinx](https://www.sphinx-doc.org/) with the Markdown parser MyST and the Furo theme; the sources are the `.md` files in `docs/`, and the version shown comes from `Cargo.toml`. Build and open them locally:
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r docs/requirements.txt
+.venv/bin/sphinx-build -W --keep-going -b html docs docs/_build/html
+xdg-open docs/_build/html/index.html
+```
+
+`-W` makes warnings errors, so a broken cross-reference or heading fails the build. Add a new page by creating `docs/<name>.md` and listing it in a `toctree` in `docs/index.md`.
+
+**Pre-commit hook.** `.githooks/pre-commit` runs that build whenever a commit touches `docs/` or `Cargo.toml`, and blocks the commit if it fails. Enable it once per clone (`git config core.hooksPath .githooks`); skip it for one commit with `git commit --no-verify`. It uses `.venv/bin/sphinx-build` or any `sphinx-build` on your `PATH`. `sh tests/scripts/test_docs_hook.sh` tests the hook itself.
+
+**Publishing.** The `Docs` workflow builds the site on every docs change and, on `main`, deploys it to GitHub Pages: <https://bogarrichard.github.io/Comms/>. It needs Settings → Pages → Source set to **GitHub Actions**; no branch or folder is chosen. Pull requests only build, as a check.
+
 ## Releasing
 
 1. Make sure `main` is green (CI runs the Rust checks on Linux/Windows/macOS and the script tests on Linux/macOS).
