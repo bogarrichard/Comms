@@ -37,5 +37,6 @@ jobs:
         with: { python-version: "3.x" }
       - run: python3 -m unittest discover -s tests/scripts -v
       - run: sh tests/scripts/test_install.sh
+      - run: sh tests/scripts/test_docs_hook.sh
       - if: matrix.os == 'ubuntu-latest'
-        run: shellcheck -s sh scripts/install.sh tests/scripts/test_install.sh
+        run: shellcheck -s sh scripts/install.sh tests/scripts/test_install.sh tests/scripts/test_docs_hook.sh .githooks/pre-commit

@@ -1,0 +1,40 @@
+#!/bin/sh
+# Pre-commit hook: build the Sphinx docs (warnings are errors) when a commit can
+# affect them, so a broken link or bad heading never reaches the published site.
+#
+#   enable once per clone:  git config core.hooksPath .githooks
+#   skip for one commit:    git commit --no-verify
+#
+# Needs sphinx-build: .venv/bin/sphinx-build (python3 -m venv .venv &&
+# .venv/bin/pip install -r docs/requirements.txt) or one on PATH.
+set -eu
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+# Only docs sources and Cargo.toml (it supplies the docs version) matter here.
+if ! git diff --cached --name-only | grep -qE '^(docs/|Cargo\.toml$)'; then
+  exit 0
+fi
+
+if [ -x "$root/.venv/bin/sphinx-build" ]; then
+  sphinx="$root/.venv/bin/sphinx-build"
+elif command -v sphinx-build >/dev/null 2>&1; then
+  sphinx=$(command -v sphinx-build)
+else
+  cat >&2 <<'MSG'
+pre-commit: this commit touches the docs but sphinx-build was not found.
+  python3 -m venv .venv && .venv/bin/pip install -r docs/requirements.txt
+(or commit with --no-verify to skip the docs check)
+MSG
+  exit 1
+fi
+
+out=$(mktemp -d)
+trap 'rm -rf "$out"' EXIT INT TERM
+
+echo "pre-commit: building the docs..." >&2
+if ! "$sphinx" -q -W --keep-going -b html docs "$out"; then
+  echo "pre-commit: the docs build failed; fix the warnings above (or use --no-verify)." >&2
+  exit 1
+fi
