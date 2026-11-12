@@ -55,6 +55,7 @@ next_steps() {
   say "try it:      comms --demo"
   say "Teams:       register the app (docs/setup-entra.md), then configure and sign in"
   say "Signal:      comms signal-link   (needs signal-cli; see docs/signal.md)"
+  say "Slack:       comms slack-login   (paste your user token; see docs/slack.md)"
 }
 
 # --------------------------------------------------------------- prebuilt binary
