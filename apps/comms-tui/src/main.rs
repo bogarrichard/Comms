@@ -113,10 +113,26 @@ async fn run() -> Result<()> {
         comms_bootstrap::start(&settings, |s| println!("{s}")).await?
     };
 
-    let app = App::new(handle, keymap).await;
+    let mut app = App::new(handle, keymap).await;
     let mut terminal = ratatui::init();
+    // Ask the terminal which image protocol it speaks (sixel, kitty, ...).
+    // Must happen before the key event stream starts reading stdin.
+    app.picker = Some(
+        ratatui_image::picker::Picker::from_query_stdio()
+            .unwrap_or_else(|_| ratatui_image::picker::Picker::halfblocks()),
+    );
+    // The workspace name and icon arrive whenever the download finishes.
+    let (ws_tx, ws_rx) = tokio::sync::mpsc::unbounded_channel();
+    if !has("--demo") && !has("--demo-slack") {
+        let settings = settings.clone();
+        tokio::spawn(async move {
+            if let Some(info) = comms_bootstrap::workspace_info(&settings).await {
+                let _ = ws_tx.send(info);
+            }
+        });
+    }
     let _ = crossterm::execute!(std::io::stdout(), EnableBracketedPaste);
-    let result = event_loop(&mut terminal, app).await;
+    let result = event_loop(&mut terminal, app, ws_rx).await;
     let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
     ratatui::restore();
     result
@@ -149,7 +165,11 @@ fn init_logging() -> Result<()> {
     Ok(())
 }
 
-async fn event_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()> {
+async fn event_loop(
+    terminal: &mut ratatui::DefaultTerminal,
+    mut app: App,
+    mut workspace: tokio::sync::mpsc::UnboundedReceiver<comms_bootstrap::WorkspaceInfo>,
+) -> Result<()> {
     let mut keys = EventStream::new();
     let mut events = app.handle.subscribe();
     let mut tick = tokio::time::interval(Duration::from_millis(100));
@@ -175,6 +195,7 @@ async fn event_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Re
                 }
                 Err(RecvError::Closed) => break,
             },
+            Some(info) = workspace.recv() => { app.set_workspace(info); dirty = true; }
             _ = tick.tick() => dirty = app.on_tick(),
         }
         if dirty {

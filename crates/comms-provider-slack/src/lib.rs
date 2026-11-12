@@ -33,7 +33,7 @@ use tracing::warn;
 pub use client::{SLACK_BASE, SlackClient};
 use model::{
     AuthTest, ConversationInfo, ConversationsList, History, PostResponse, SChannel, SMessage,
-    UserInfo, next_cursor, parse_ts, pretty_mpim_name,
+    TeamInfo, UserInfo, next_cursor, parse_ts, pretty_mpim_name,
 };
 
 pub const PROVIDER_KIND: &str = "slack";
@@ -57,7 +57,15 @@ pub mod scopes {
         "mpim:history",
         "users:read",
         "chat:write",
+        "team:read",
     ];
+}
+
+/// The workspace's name and, when it has set one, its icon (PNG/JPEG bytes).
+#[derive(Debug, Clone)]
+pub struct WorkspaceInfo {
+    pub name: String,
+    pub icon: Option<Vec<u8>>,
 }
 
 pub struct SlackProvider {
@@ -70,6 +78,26 @@ pub struct SlackProvider {
 impl SlackProvider {
     pub fn new(token: impl Into<String>) -> Result<Self, ProviderError> {
         Self::with_base_url(token, SLACK_BASE)
+    }
+
+    /// Workspace name and icon (needs the `team:read` scope). A failed icon
+    /// download is not an error: the name alone is still returned.
+    pub async fn workspace(&self) -> Result<WorkspaceInfo, ProviderError> {
+        let info: TeamInfo = self.client.call("team.info", &[]).await?;
+        let icon = match info.team.icon.as_ref().and_then(|i| i.best_url()) {
+            Some(url) => match self.client.fetch_image(url).await {
+                Ok(bytes) => Some(bytes),
+                Err(e) => {
+                    warn!("workspace icon not downloaded: {e}");
+                    None
+                }
+            },
+            None => None,
+        };
+        Ok(WorkspaceInfo {
+            name: info.team.name,
+            icon,
+        })
     }
 
     pub fn with_base_url(token: impl Into<String>, base: &str) -> Result<Self, ProviderError> {

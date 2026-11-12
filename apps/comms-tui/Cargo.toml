@@ -34,6 +34,8 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 unicode-width.workspace = true
+ratatui-image = { version = "11", default-features = false, features = ["crossterm"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 [dev-dependencies]
 comms-storage.workspace = true

@@ -234,3 +234,34 @@ mod tests {
         assert!(!m(None).is_system());
     }
 }
+
+#[derive(Debug, Deserialize)]
+pub struct TeamInfo {
+    pub team: STeam,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct STeam {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub icon: Option<STeamIcon>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct STeamIcon {
+    /// Slack's generated placeholder; not worth showing over our own tile.
+    #[serde(default)]
+    pub image_default: bool,
+    pub image_132: Option<String>,
+    pub image_68: Option<String>,
+}
+
+impl STeamIcon {
+    pub fn best_url(&self) -> Option<&str> {
+        if self.image_default {
+            return None;
+        }
+        self.image_132.as_deref().or(self.image_68.as_deref())
+    }
+}

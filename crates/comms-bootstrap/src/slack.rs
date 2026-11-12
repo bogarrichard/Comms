@@ -7,7 +7,7 @@ use comms_app::AppHandle;
 use comms_provider_slack::{SlackProvider, looks_like_token};
 use comms_storage::Store;
 
-use crate::{Paths, Settings, core_config};
+use crate::{Paths, Settings, WorkspaceInfo, core_config};
 
 /// The Slack backend. The token comes from `COMMS_SLACK_TOKEN` or `[slack] token`.
 pub async fn start_slack(settings: &Settings) -> Result<AppHandle> {
@@ -29,6 +29,20 @@ pub async fn start_slack(settings: &Settings) -> Result<AppHandle> {
         .context("opening the local database")?;
     let provider = SlackProvider::new(token)?;
     Ok(AppHandle::start(Arc::new(provider), store, core_config(settings)).await?)
+}
+
+/// The workspace's name and icon (needs the `team:read` scope).
+pub async fn slack_workspace(settings: &Settings) -> Result<WorkspaceInfo> {
+    let token = settings
+        .slack
+        .token
+        .clone()
+        .context("no Slack token configured")?;
+    let ws = SlackProvider::new(token)?.workspace().await?;
+    Ok(WorkspaceInfo {
+        name: ws.name,
+        icon: ws.icon,
+    })
 }
 
 #[cfg(test)]

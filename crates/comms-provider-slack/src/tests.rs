@@ -369,3 +369,78 @@ async fn unsupported_operations_say_so() {
     assert!(caps.channels && caps.direct_messages && caps.edit_messages);
     assert!(!caps.realtime_events && !caps.search);
 }
+
+#[tokio::test]
+async fn workspace_name_and_icon_come_from_team_info_without_the_token_on_the_download() {
+    let (server, provider) = setup().await;
+    answer(
+        &server,
+        "team.info",
+        json!({"ok": true, "team": {"name": "Lab", "icon": {
+            "image_default": false,
+            "image_132": format!("{}/icon.png", server.uri())
+        }}}),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path("/icon.png"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![1u8, 2, 3]))
+        .mount(&server)
+        .await;
+
+    let ws = provider.workspace().await.unwrap();
+    assert_eq!(ws.name, "Lab");
+    assert_eq!(ws.icon, Some(vec![1, 2, 3]));
+
+    let requests = server.received_requests().await.unwrap();
+    let download = requests
+        .iter()
+        .find(|r| r.url.path() == "/icon.png")
+        .unwrap();
+    assert!(download.headers.get("authorization").is_none());
+}
+
+#[tokio::test]
+async fn the_default_icon_and_a_failed_download_leave_just_the_name() {
+    let (server, provider) = setup().await;
+    answer(
+        &server,
+        "team.info",
+        json!({"ok": true, "team": {"name": "Lab", "icon": {
+            "image_default": true, "image_132": "https://example.invalid/x.png"
+        }}}),
+    )
+    .await;
+    let ws = provider.workspace().await.unwrap();
+    assert_eq!((ws.name.as_str(), ws.icon.is_none()), ("Lab", true));
+
+    let (server, provider) = setup().await;
+    answer(
+        &server,
+        "team.info",
+        json!({"ok": true, "team": {"name": "Lab", "icon": {
+            "image_132": format!("{}/gone.png", server.uri())
+        }}}),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path("/gone.png"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    let ws = provider.workspace().await.unwrap();
+    assert!(ws.icon.is_none() && ws.name == "Lab");
+}
+
+#[tokio::test]
+async fn team_info_without_the_scope_says_which_one_is_missing() {
+    let (server, provider) = setup().await;
+    answer(
+        &server,
+        "team.info",
+        json!({"ok": false, "error": "missing_scope", "needed": "team:read"}),
+    )
+    .await;
+    let err = provider.workspace().await.unwrap_err();
+    assert!(err.to_string().contains("team:read"), "{err}");
+}

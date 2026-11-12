@@ -11,8 +11,27 @@ Slack throttles apps that are distributed commercially without Marketplace appro
 ## 1. Create the app (once per workspace)
 
 1. Open <https://api.slack.com/apps> and choose **Create New App → From scratch**. Pick a name (for example `Comms`) and your workspace.
+   Faster: choose **From a manifest** instead (or **From scratch → Paste a manifest**), pick your workspace and paste this, which sets the name and every scope at once:
+
+   ```json
+   {
+     "display_information": { "name": "Comms" },
+     "oauth_config": {
+       "scopes": {
+         "user": [
+           "channels:read", "groups:read", "im:read", "mpim:read",
+           "channels:history", "groups:history", "im:history", "mpim:history",
+           "users:read", "chat:write", "team:read"
+         ]
+       }
+     },
+     "settings": { "org_deploy_enabled": false, "socket_mode_enabled": false, "token_rotation_enabled": false }
+   }
+   ```
+
+   Then skip to step 3. Otherwise, continue by hand:
 2. Under **OAuth & Permissions → User Token Scopes**, add:
-   `channels:read`, `groups:read`, `im:read`, `mpim:read`, `channels:history`, `groups:history`, `im:history`, `mpim:history`, `users:read`, `chat:write`.
+   `channels:read`, `groups:read`, `im:read`, `mpim:read`, `channels:history`, `groups:history`, `im:history`, `mpim:history`, `users:read`, `chat:write`, `team:read` (the last one is only for the workspace icon; Comms works without it).
 3. Click **Install to Workspace** (or **Request to install**, if your workspace needs an admin to approve it) and allow it.
 
 ## 2. Get your token
@@ -56,9 +75,11 @@ With Slack the window looks like the Slack app: a narrow **rail** on the far lef
 
 Replies are folded into an "N replies" line under their thread's first message and shown in the pane. The rail needs 80 columns; under that it is dropped, and on terminals too narrow for chat and pane side by side the pane replaces the chat. Teams and Signal keep the plain two-panel layout.
 
+The workspace tile shows your workspace's own icon when the terminal can display images (sixel, kitty or iTerm2 graphics; other terminals get a coarse half-block rendering) and the token has `team:read`. Otherwise it shows the workspace's initial.
+
 Try it without a Slack account: `comms --demo-slack`.
 
-Not yet: replying inside a thread (the pane is read-only), and the real Slack provider does not load thread replies yet (`conversations.replies`), so threads are only populated in the demo for now. The workspace tile shows the first letter of the workspace name once the provider reports one; until then it shows `S`.
+Not yet: replying inside a thread (the pane is read-only), and the real Slack provider does not load thread replies yet (`conversations.replies`), so threads are only populated in the demo for now. Without `team:read` (or a custom icon) the tile shows the first letter of the workspace name.
 
 ## Troubleshooting
 

@@ -75,7 +75,7 @@ fn draw_content(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-fn draw_rail(f: &mut Frame, app: &App, area: Rect) {
+fn draw_rail(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Rail;
     let block = Block::default()
         .borders(Borders::RIGHT)
@@ -97,26 +97,34 @@ fn draw_rail(f: &mut Frame, app: &App, area: Rect) {
     let pad = (inner.width as usize).saturating_sub(tile_w) / 2;
     let tile = Style::new().bg(t.accent).fg(Color::Black);
     let blank = " ".repeat(tile_w);
-    let mut lines: Vec<Line> = vec![
-        Line::from(vec![
-            Span::raw(" ".repeat(pad)),
-            Span::styled(blank.clone(), tile),
-        ]),
-        Line::from(vec![
-            Span::raw(" ".repeat(pad)),
-            Span::styled(
-                format!("   {initial}   "),
-                tile.add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::from(vec![Span::raw(" ".repeat(pad)), Span::styled(blank, tile)]),
+    let has_icon = app.icon.is_some();
+    let mut lines: Vec<Line> = if has_icon {
+        // The icon image is drawn over these three rows afterwards.
+        vec![Line::raw(""), Line::raw(""), Line::raw("")]
+    } else {
+        vec![
+            Line::from(vec![
+                Span::raw(" ".repeat(pad)),
+                Span::styled(blank.clone(), tile),
+            ]),
+            Line::from(vec![
+                Span::raw(" ".repeat(pad)),
+                Span::styled(
+                    format!("   {initial}   "),
+                    tile.add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(vec![Span::raw(" ".repeat(pad)), Span::styled(blank, tile)]),
+        ]
+    };
+    lines.push(
         Line::from(Span::styled(
             truncate(&name, inner.width as usize),
             Style::new().fg(t.muted),
         ))
         .alignment(Alignment::Center),
-        Line::raw(""),
-    ];
+    );
+    lines.push(Line::raw(""));
 
     let active = app.rail_item();
     for item in crate::app::RailItem::ALL {
@@ -140,6 +148,17 @@ fn draw_rail(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(Span::styled(text, style)));
     }
     f.render_widget(Paragraph::new(lines), inner);
+    if let Some(icon) = app.icon.as_mut() {
+        // Cells are about twice as tall as wide, so 6x3 cells is square.
+        let w = 6u16.min(inner.width);
+        let rect = Rect {
+            x: inner.x + (inner.width - w) / 2,
+            y: inner.y,
+            width: w,
+            height: 3,
+        };
+        f.render_stateful_widget(ratatui_image::StatefulImage::default(), rect, icon);
+    }
 }
 
 fn draw_thread(f: &mut Frame, app: &App, area: Rect) {

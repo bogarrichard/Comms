@@ -28,11 +28,36 @@ pub use settings::{Backend, ChannelAccess, Paths, Settings, SignalSettings, Slac
 #[cfg(feature = "signal")]
 pub use signal::{signal_link, start_signal, valid_signal_account};
 #[cfg(feature = "slack")]
-pub use slack::start_slack;
+pub use slack::{slack_workspace, start_slack};
 #[cfg(feature = "teams")]
 pub use teams::{
     explain_auth_error, login, make_session, open_in_browser, start_graph, start_teams, teams_login,
 };
+
+/// What the frontend shows for the workspace: its name and an optional icon
+/// (PNG or JPEG bytes).
+#[derive(Debug, Clone)]
+pub struct WorkspaceInfo {
+    pub name: String,
+    pub icon: Option<Vec<u8>>,
+}
+
+/// Best-effort workspace name and icon for the backend in `settings`. `None`
+/// for backends without the notion, and on any failure (a missing `team:read`
+/// scope, no network): the UI then keeps its letter tile.
+pub async fn workspace_info(settings: &Settings) -> Option<WorkspaceInfo> {
+    match settings.provider {
+        #[cfg(feature = "slack")]
+        Backend::Slack => match slack_workspace(settings).await {
+            Ok(ws) => Some(ws),
+            Err(e) => {
+                tracing::warn!("workspace info unavailable: {e}");
+                None
+            }
+        },
+        _ => None,
+    }
+}
 
 /// Which backends this build contains.
 pub fn compiled_backends() -> Vec<Backend> {

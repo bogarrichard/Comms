@@ -114,6 +114,42 @@ impl SlackClient {
     }
 }
 
+/// Largest workspace icon we are willing to download.
+const MAX_ICON_BYTES: usize = 2 * 1024 * 1024;
+
+impl SlackClient {
+    /// Download a public image (the workspace icon). The token is **not**
+    /// sent: icons live on Slack's CDN and need no authentication.
+    pub async fn fetch_image(&self, url: &str) -> Result<Vec<u8>, ProviderError> {
+        let url = Url::parse(url)
+            .map_err(|e| ProviderError::InvalidResponse(format!("bad image url: {e}")))?;
+        let loopback = matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"));
+        if url.scheme() != "https" && !loopback {
+            return Err(ProviderError::InvalidResponse(
+                "image URL must use HTTPS".into(),
+            ));
+        }
+        let resp = self.http.get(url).send().await.map_err(network_error)?;
+        if !resp.status().is_success() {
+            return Err(ProviderError::Server {
+                status: resp.status().as_u16(),
+                message: "image download failed".into(),
+            });
+        }
+        if resp
+            .content_length()
+            .is_some_and(|n| n > MAX_ICON_BYTES as u64)
+        {
+            return Err(ProviderError::InvalidResponse("image too large".into()));
+        }
+        let bytes = resp.bytes().await.map_err(network_error)?;
+        if bytes.len() > MAX_ICON_BYTES {
+            return Err(ProviderError::InvalidResponse("image too large".into()));
+        }
+        Ok(bytes.to_vec())
+    }
+}
+
 fn network_error(e: reqwest::Error) -> ProviderError {
     ProviderError::Network {
         // Only a failure to connect proves the request never left.

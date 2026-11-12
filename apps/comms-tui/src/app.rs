@@ -147,6 +147,12 @@ pub struct App {
     pub thread: Option<RemoteId>,
     /// Set by the renderer: whether the rail is on screen (it needs width).
     pub rail_visible: bool,
+    /// Workspace name from the provider (Slack `team.info`), when known.
+    pub workspace: Option<String>,
+    /// Graphics protocol picked for this terminal (sixel, kitty, ... or half blocks).
+    pub picker: Option<ratatui_image::picker::Picker>,
+    /// The workspace icon, ready to draw in the rail tile.
+    pub icon: Option<ratatui_image::protocol::StatefulProtocol>,
 }
 
 const INITIAL_VIEW: u32 = 300;
@@ -182,10 +188,24 @@ impl App {
             tick: 0,
             thread: None,
             rail_visible: false,
+            workspace: None,
+            picker: None,
+            icon: None,
         };
         // Local-first: show whatever is cached before any network answer.
         app.refresh_conversations().await;
         app
+    }
+
+    /// Take the workspace name and icon the provider reported. An icon that
+    /// cannot be decoded is dropped: the letter tile stays.
+    pub fn set_workspace(&mut self, info: comms_bootstrap::WorkspaceInfo) {
+        self.workspace = Some(info.name);
+        if let (Some(picker), Some(bytes)) = (&self.picker, info.icon)
+            && let Ok(img) = image::load_from_memory(&bytes)
+        {
+            self.icon = Some(picker.new_resize_protocol(img));
+        }
     }
 
     pub fn visible(&self) -> Vec<&Conversation> {
@@ -216,6 +236,9 @@ impl App {
     /// Name shown under the workspace tile: the group of the first
     /// conversation that has one, otherwise the service name.
     pub fn workspace_name(&self) -> String {
+        if let Some(name) = self.workspace.as_ref().filter(|n| !n.trim().is_empty()) {
+            return name.clone();
+        }
         self.convs
             .iter()
             .find_map(|c| c.group.clone())
