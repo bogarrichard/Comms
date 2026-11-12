@@ -18,11 +18,13 @@ pub enum Mode {
     Compose,
     Search,
     Help,
+    /// The vim-style `:` command line.
+    Command,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
-    /// The left rail of the workspace layout (Home / DMs / Activity).
+    /// The left rail of the workspace layout (Home / Activity / DMs / Channels).
     Rail,
     Sidebar,
     Messages,
@@ -69,42 +71,52 @@ impl Filter {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RailItem {
     Home,
-    Dms,
     Activity,
+    Dms,
+    Channels,
 }
 
 impl RailItem {
-    pub const ALL: [RailItem; 3] = [RailItem::Home, RailItem::Dms, RailItem::Activity];
+    pub const ALL: [RailItem; 4] = [
+        RailItem::Home,
+        RailItem::Activity,
+        RailItem::Dms,
+        RailItem::Channels,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             RailItem::Home => "Home",
-            RailItem::Dms => "DMs",
             RailItem::Activity => "Activity",
+            RailItem::Dms => "DMs",
+            RailItem::Channels => "Channels",
         }
     }
 
     pub fn icon(self) -> &'static str {
         match self {
             RailItem::Home => "⌂",
-            RailItem::Dms => "›",
             RailItem::Activity => "●",
+            RailItem::Dms => "›",
+            RailItem::Channels => "#",
         }
     }
 
     fn filter(self) -> Filter {
         match self {
             RailItem::Home => Filter::All,
-            RailItem::Dms => Filter::Chats,
             RailItem::Activity => Filter::Unread,
+            RailItem::Dms => Filter::Chats,
+            RailItem::Channels => Filter::Channels,
         }
     }
 
     fn of(filter: Filter) -> Self {
         match filter {
-            Filter::All | Filter::Channels => RailItem::Home,
-            Filter::Chats => RailItem::Dms,
+            Filter::All => RailItem::Home,
             Filter::Unread => RailItem::Activity,
+            Filter::Chats => RailItem::Dms,
+            Filter::Channels => RailItem::Channels,
         }
     }
 }
@@ -153,6 +165,14 @@ pub struct App {
     pub picker: Option<ratatui_image::picker::Picker>,
     /// The workspace icon, ready to draw in the rail tile.
     pub icon: Option<ratatui_image::protocol::StatefulProtocol>,
+    /// The text after `:` while in command mode.
+    pub command: String,
+    /// Set by `:switch`; the main loop performs the switch and clears it.
+    pub switch_to: Option<String>,
+    /// Apps `:switch` may go to (empty = switching is unavailable, as in the demo).
+    pub apps: Vec<String>,
+    /// The app we are connected to, as `:switch` names it.
+    pub app_name: String,
 }
 
 const INITIAL_VIEW: u32 = 300;
@@ -191,6 +211,10 @@ impl App {
             workspace: None,
             picker: None,
             icon: None,
+            command: String::new(),
+            switch_to: None,
+            apps: Vec::new(),
+            app_name: String::new(),
         };
         // Local-first: show whatever is cached before any network answer.
         app.refresh_conversations().await;
@@ -228,9 +252,13 @@ impl App {
         RailItem::of(self.filter)
     }
 
-    /// Number of conversations with unread messages (the Activity badge).
-    pub fn unread_count(&self) -> usize {
-        self.convs.iter().filter(|c| c.unread).count()
+    /// Conversations with unread messages under a rail entry (its badge).
+    pub fn unread_in(&self, item: RailItem) -> usize {
+        let filter = item.filter();
+        self.convs
+            .iter()
+            .filter(|c| c.unread && filter.admits(c))
+            .count()
     }
 
     /// Name shown under the workspace tile: the group of the first
@@ -475,11 +503,99 @@ impl App {
             Mode::Help => self.mode = Mode::Normal,
             Mode::Compose => self.compose_key(key),
             Mode::Search => self.search_key(key).await,
+            Mode::Command => self.command_key(key),
             Mode::Normal => {
                 if let Some(action) = self.keymap.lookup(key) {
                     self.action(action).await;
                 }
             }
+        }
+    }
+
+    fn command_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Char('c' | 'u') if ctrl => self.mode = Mode::Normal,
+            KeyCode::Enter => {
+                let line = std::mem::take(&mut self.command);
+                self.mode = Mode::Normal;
+                self.run_command(&line);
+            }
+            // Like vim: backspacing past the colon leaves the command line.
+            KeyCode::Backspace => {
+                if self.command.pop().is_none() {
+                    self.mode = Mode::Normal;
+                }
+            }
+            KeyCode::Tab => self.complete_command(),
+            KeyCode::Char(c) if !ctrl => self.command.push(c),
+            _ => {}
+        }
+    }
+
+    /// Tab: finish the command name, or the app name after `switch`.
+    fn complete_command(&mut self) {
+        const COMMANDS: [&str; 4] = ["help", "quit", "refresh", "switch"];
+        let (head, arg) = match self.command.split_once(' ') {
+            Some((h, a)) => (Some(h.to_owned()), a.trim_start().to_owned()),
+            None => (None, self.command.clone()),
+        };
+        let pool: Vec<String> = match &head {
+            None => COMMANDS.iter().map(|s| (*s).to_owned()).collect(),
+            Some(h) if matches!(h.as_str(), "switch" | "sw") => self.apps.clone(),
+            Some(_) => return,
+        };
+        let hits: Vec<&String> = pool.iter().filter(|p| p.starts_with(&arg)).collect();
+        if let [one] = hits.as_slice() {
+            self.command = match head {
+                Some(h) => format!("{h} {one}"),
+                None => (*one).clone(),
+            };
+        }
+    }
+
+    /// Run one `:` command line (without the colon).
+    pub fn run_command(&mut self, line: &str) {
+        let mut words = line.split_whitespace();
+        let Some(cmd) = words.next() else { return };
+        let arg = words.next();
+        match cmd {
+            "q" | "quit" => self.quit = true,
+            "h" | "help" => self.mode = Mode::Help,
+            "r" | "refresh" => {
+                self.handle.send(Command::RefreshConversations);
+                self.toast("Refreshing…", false);
+            }
+            "sw" | "switch" => self.switch_command(arg),
+            other => self.toast(format!("Not a command: {other}"), true),
+        }
+    }
+
+    fn switch_command(&mut self, arg: Option<&str>) {
+        if self.apps.is_empty() {
+            return self.toast("Switching apps is not available here", true);
+        }
+        let Some(name) = arg.map(str::to_lowercase) else {
+            let list: Vec<String> = self
+                .apps
+                .iter()
+                .map(|a| {
+                    if *a == self.app_name {
+                        format!("{a}*")
+                    } else {
+                        a.clone()
+                    }
+                })
+                .collect();
+            return self.toast(format!("Apps: {} (:switch <app>)", list.join(" ")), false);
+        };
+        if name == self.app_name {
+            self.toast(format!("Already on {name}"), false);
+        } else if self.apps.contains(&name) {
+            self.switch_to = Some(name);
+        } else {
+            self.toast(format!("No app {name}; try {}", self.apps.join(", ")), true);
         }
     }
 
@@ -616,6 +732,10 @@ impl App {
                 Focus::Sidebar if self.open.is_some() => self.focus = Focus::Messages,
                 _ => {}
             },
+            Action::Command => {
+                self.command.clear();
+                self.mode = Mode::Command;
+            }
             Action::Compose => {
                 if self.open.is_some() {
                     self.mode = Mode::Compose;

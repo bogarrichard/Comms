@@ -27,10 +27,11 @@ pub enum Action {
     PrevThread,
     FocusLeft,
     FocusRight,
+    Command,
 }
 
 impl Action {
-    pub const ALL: [Action; 21] = [
+    pub const ALL: [Action; 22] = [
         Action::Quit,
         Action::Down,
         Action::Up,
@@ -52,6 +53,7 @@ impl Action {
         Action::PrevThread,
         Action::FocusLeft,
         Action::FocusRight,
+        Action::Command,
     ];
 
     /// Name used in `config.toml` under `[keys]`.
@@ -78,6 +80,7 @@ impl Action {
             Action::PrevThread => "prev_thread",
             Action::FocusLeft => "focus_left",
             Action::FocusRight => "focus_right",
+            Action::Command => "command",
         }
     }
 
@@ -104,6 +107,7 @@ impl Action {
             Action::PrevThread => "previous thread",
             Action::FocusLeft => "move to the panel on the left",
             Action::FocusRight => "move to the panel on the right",
+            Action::Command => "command line (:switch <app>, :help, :q)",
         }
     }
 
@@ -130,6 +134,7 @@ impl Action {
             Action::PrevThread => &["["],
             Action::FocusLeft => &["ctrl+h"],
             Action::FocusRight => &["ctrl+l"],
+            Action::Command => &[":"],
         }
     }
 

@@ -32,7 +32,7 @@ USAGE:
     comms --demo-slack        the same, with the Slack workspace layout and threads
     comms login               sign in with your browser
     comms login --device-code sign in with a code (for SSH / no browser)
-    comms slack-login         paste your Slack user token once (checked, then saved to the config)
+    comms slack-login         sign in to Slack: through the browser (needs [slack] client_id), or\n                              paste your user token (--token forces this); saved to the config
     comms signal-link         link this computer to your Signal account (needs signal-cli)
     comms logout [--wipe-cache]
                               forget the stored sign-in (and delete cached messages)
@@ -91,7 +91,8 @@ async fn run() -> Result<()> {
             return Ok(());
         }
         Some("slack-login") => {
-            slack_setup().await?;
+            let settings = Settings::load()?;
+            slack_setup(&settings, has("--token")).await?;
             println!("Start the client with `comms`.");
             return Ok(());
         }
@@ -115,7 +116,7 @@ async fn run() -> Result<()> {
         && std::io::stdin().is_terminal()
         && std::io::stdout().is_terminal()
     {
-        slack_setup().await?;
+        slack_setup(&settings, false).await?;
         settings = Settings::load()?;
     }
     let keymap = KeyMap::new(&settings.keys)
@@ -130,7 +131,7 @@ async fn run() -> Result<()> {
         comms_bootstrap::start(&settings, |s| println!("{s}")).await?
     };
 
-    let mut app = App::new(handle, keymap).await;
+    let mut app = App::new(handle, keymap.clone()).await;
     let mut terminal = ratatui::init();
     // Ask the terminal which image protocol it speaks (sixel, kitty, ...).
     // Must happen before the key event stream starts reading stdin.
@@ -140,31 +141,38 @@ async fn run() -> Result<()> {
     );
     // The workspace name and icon arrive whenever the download finishes.
     let (ws_tx, ws_rx) = tokio::sync::mpsc::unbounded_channel();
-    if !has("--demo") && !has("--demo-slack") {
-        let settings = settings.clone();
-        tokio::spawn(async move {
-            if let Some(info) = comms_bootstrap::workspace_info(&settings).await {
-                let _ = ws_tx.send(info);
-            }
-        });
+    let demo = has("--demo") || has("--demo-slack");
+    if !demo {
+        app.apps = comms_bootstrap::compiled_backends()
+            .into_iter()
+            .map(|b| b.name().to_owned())
+            .collect();
+        app.app_name = settings.provider.name().to_owned();
+        spawn_workspace_fetch(&settings, 0, &ws_tx);
     }
     let _ = crossterm::execute!(std::io::stdout(), EnableBracketedPaste);
-    let result = event_loop(&mut terminal, app, ws_rx).await;
+    let result = event_loop(&mut terminal, app, ws_rx, ws_tx, settings, keymap).await;
     let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
     ratatui::restore();
     result
 }
 
-/// Walk the user through giving Comms a Slack token: explain where to find
-/// it, read it without echoing, check it with Slack and save it.
-async fn slack_setup() -> Result<()> {
-    println!(
-        "Slack needs your User OAuth Token (starts with xoxp-).\n\
-         Create the app from the manifest in docs/slack.md (api.slack.com/apps), install it,\n\
-         then copy the token from OAuth & Permissions. Not the xoxb- or xapp- ones.\n"
-    );
-    let token = read_secret("Token (input is hidden, Esc cancels): ")?;
-    let who = comms_bootstrap::slack_login(&token).await?;
+/// Give Comms a Slack token: through the browser when a client ID is
+/// configured (and `token_only` is not set), otherwise by pasting it.
+async fn slack_setup(settings: &Settings, token_only: bool) -> Result<()> {
+    let who = if settings.slack.client_id.is_some() && !token_only {
+        comms_bootstrap::slack_login_browser(settings, |s| println!("{s}")).await?
+    } else {
+        println!(
+            "Slack needs your User OAuth Token (starts with xoxp-).\n\
+             Create the app from the manifest in docs/slack.md (api.slack.com/apps), install it,\n\
+             then copy the token from OAuth & Permissions. Not the xoxb- or xapp- ones.\n\
+             (With a shared app's Client ID in COMMS_SLACK_CLIENT_ID, `comms slack-login` signs in\n\
+             through the browser instead.)\n"
+        );
+        let token = read_secret("Token (input is hidden, Esc cancels): ")?;
+        comms_bootstrap::slack_login(&token).await?
+    };
     println!(
         "Signed in to Slack as {who}. Saved to {} (readable only by you).",
         Paths::discover()?.config_file.display()
@@ -237,11 +245,49 @@ fn init_logging() -> Result<()> {
     Ok(())
 }
 
+type WorkspaceMsg = (u64, comms_bootstrap::WorkspaceInfo);
+
+/// Fetch the workspace name and icon in the background. `generation` tells
+/// the loop which connection the answer belongs to (`:switch` bumps it).
+fn spawn_workspace_fetch(
+    settings: &Settings,
+    generation: u64,
+    tx: &tokio::sync::mpsc::UnboundedSender<WorkspaceMsg>,
+) {
+    let settings = settings.clone();
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        if let Some(info) = comms_bootstrap::workspace_info(&settings).await {
+            let _ = tx.send((generation, info));
+        }
+    });
+}
+
+/// `:switch <app>`: start the other backend and replace the whole UI state
+/// with a fresh one. Dropping the old handle stops its engine (and signal-cli).
+async fn switch_app(app: &mut App, name: &str, settings: &Settings, keymap: &KeyMap) -> Result<()> {
+    let backend = comms_bootstrap::Backend::from_name(name).context("unknown app")?;
+    let mut next_settings = settings.clone();
+    next_settings.provider = backend;
+    // Sign-in prompts would corrupt the screen; a missing sign-in is an error here.
+    let handle = comms_bootstrap::start(&next_settings, |_| {}).await?;
+    let mut next = App::new(handle, keymap.clone()).await;
+    next.picker = app.picker.take();
+    next.apps = std::mem::take(&mut app.apps);
+    next.app_name = backend.name().to_owned();
+    *app = next;
+    Ok(())
+}
+
 async fn event_loop(
     terminal: &mut ratatui::DefaultTerminal,
     mut app: App,
-    mut workspace: tokio::sync::mpsc::UnboundedReceiver<comms_bootstrap::WorkspaceInfo>,
+    mut workspace: tokio::sync::mpsc::UnboundedReceiver<WorkspaceMsg>,
+    workspace_tx: tokio::sync::mpsc::UnboundedSender<WorkspaceMsg>,
+    settings: Settings,
+    keymap: KeyMap,
 ) -> Result<()> {
+    let mut generation = 0u64;
     let mut keys = EventStream::new();
     let mut events = app.handle.subscribe();
     let mut tick = tokio::time::interval(Duration::from_millis(100));
@@ -267,8 +313,36 @@ async fn event_loop(
                 }
                 Err(RecvError::Closed) => break,
             },
-            Some(info) = workspace.recv() => { app.set_workspace(info); dirty = true; }
+            Some((g, info)) = workspace.recv() => {
+                if g == generation { app.set_workspace(info); dirty = true; }
+            }
             _ = tick.tick() => dirty = app.on_tick(),
+        }
+        if let Some(name) = app.switch_to.take() {
+            app.toast(format!("Switching to {name}…"), false);
+            terminal.draw(|f| ui::draw(f, &mut app))?;
+            match switch_app(&mut app, &name, &settings, &keymap).await {
+                Ok(()) => {
+                    generation += 1;
+                    events = app.handle.subscribe();
+                    let mut next = settings.clone();
+                    next.provider =
+                        comms_bootstrap::Backend::from_name(&name).unwrap_or(next.provider);
+                    spawn_workspace_fetch(&next, generation, &workspace_tx);
+                    app.toast(format!("Switched to {name}"), false);
+                }
+                Err(e) => {
+                    let msg = format!("{e:#}");
+                    app.toast(
+                        format!(
+                            "Could not switch to {name}: {}",
+                            msg.lines().next().unwrap_or("")
+                        ),
+                        true,
+                    );
+                }
+            }
+            dirty = true;
         }
         if dirty {
             terminal.draw(|f| ui::draw(f, &mut app))?;

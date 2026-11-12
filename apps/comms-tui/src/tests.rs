@@ -471,24 +471,25 @@ async fn open_title(app: &mut App, title: &str) {
 }
 
 #[tokio::test]
-async fn slack_shows_the_workspace_rail_with_home_dms_and_activity() {
+async fn slack_shows_the_workspace_rail_with_home_activity_dms_and_channels() {
     let mut app = slack_app().await;
     assert_eq!(app.theme, crate::theme::Theme::SLACK);
     let s = screen(&mut app, 110, 30);
     assert!(
-        s.contains("Home") && s.contains("DMs") && s.contains("Activity"),
+        s.contains("Home") && s.contains("Activity") && s.contains("DMs") && s.contains("Channels"),
         "{s}"
     );
     // The workspace tile carries the initial, drawn in the accent colour.
-    let tile = row_colours(&mut app, "  S  ");
+    let tile = row_colours(&mut app, "    S    ");
     assert!(
         tile.contains(&crate::theme::Theme::SLACK.accent),
         "{tile:?}"
     );
-    // Activity shows how many conversations have unread messages.
-    assert!(app.unread_count() >= 1);
+    // Each entry shows how many of its conversations have unread messages.
+    let activity = app.unread_in(crate::app::RailItem::Activity);
+    assert!(activity >= 1);
     assert!(
-        s.contains(&format!("Activity {}", app.unread_count())),
+        s.contains("Activity") && s.contains(&format!("{activity} ")),
         "{s}"
     );
     assert!(app.rail_visible);
@@ -502,14 +503,25 @@ async fn the_rail_filters_the_conversation_list() {
     app.on_key(key('h')).await;
     assert_eq!(app.focus, Focus::Rail);
 
-    app.on_key(key('j')).await; // DMs
-    let s = screen(&mut app, 110, 30);
-    assert!(s.contains("Anna Kovács") && !s.contains("# general"), "{s}");
-
     app.on_key(key('j')).await; // Activity = unread only
     assert!(app.visible().iter().all(|c| c.unread));
     assert!(!app.visible().is_empty());
 
+    app.on_key(key('j')).await; // DMs
+    let s = screen(&mut app, 110, 30);
+    assert!(s.contains("Anna Kovács") && !s.contains("# general"), "{s}");
+
+    app.on_key(key('j')).await; // Channels
+    assert!(
+        app.visible()
+            .iter()
+            .all(|c| c.kind == comms_domain::ConversationKind::Channel)
+    );
+    assert!(!app.visible().is_empty());
+    let s = screen(&mut app, 110, 30);
+    assert!(s.contains("# general") && !s.contains("Anna Kovács"), "{s}");
+
+    app.on_key(key('k')).await;
     app.on_key(key('k')).await;
     app.on_key(key('k')).await; // Home
     assert!(app.visible().len() >= 6);
@@ -589,7 +601,7 @@ async fn on_a_narrower_terminal_the_thread_replaces_the_chat_and_the_rail_goes()
     // Under 80 columns the rail is dropped and focus cannot be stuck on it.
     app.focus = Focus::Rail;
     let s = screen(&mut app, 76, 24);
-    assert!(!s.contains("Activity"), "{s}");
+    assert!(!s.contains("Channels") && !s.contains("Activity"), "{s}");
     assert!(!app.rail_visible);
     assert_ne!(app.focus, Focus::Rail);
 }
@@ -599,7 +611,7 @@ async fn teams_and_signal_keep_their_single_sidebar_layout() {
     for kind in ["msgraph", "signal"] {
         let mut app = app_for(kind).await;
         let s = screen(&mut app, 110, 30);
-        assert!(!s.contains("Activity") && !s.contains("DMs"), "{kind}: {s}");
+        assert!(!s.contains("Channels") && !s.contains("DMs"), "{kind}: {s}");
         assert!(!app.rail_visible);
         // `h` does nothing special without a rail.
         app.focus = Focus::Sidebar;
@@ -624,4 +636,110 @@ async fn slack_uses_green_blue_grey_for_selection_and_thread_markers() {
     let marker = row_colours(&mut app, "4 replies");
     assert!(marker.contains(&Theme::SLACK.secondary), "{marker:?}");
     assert!(marker.contains(&Theme::SLACK.muted), "{marker:?}");
+}
+
+async fn type_command(app: &mut App, text: &str, enter: bool) {
+    app.on_key(key(':')).await;
+    for c in text.chars() {
+        app.on_key(key(c)).await;
+    }
+    if enter {
+        app.on_key(code(KeyCode::Enter)).await;
+    }
+}
+
+fn with_apps(app: &mut App) {
+    app.apps = ["slack", "teams", "signal"].map(String::from).to_vec();
+    app.app_name = "slack".to_owned();
+}
+
+#[tokio::test]
+async fn colon_opens_the_command_line_and_shows_what_you_type() {
+    let mut app = demo_app().await;
+    type_command(&mut app, "sw", false).await;
+    assert_eq!(app.mode, Mode::Command);
+    let s = screen(&mut app, 100, 30);
+    assert!(s.contains("COMMAND") && s.contains(":sw"), "{s}");
+}
+
+#[tokio::test]
+async fn escape_and_backspacing_past_the_colon_leave_the_command_line() {
+    let mut app = demo_app().await;
+    type_command(&mut app, "x", false).await;
+    app.on_key(code(KeyCode::Esc)).await;
+    assert_eq!(app.mode, Mode::Normal);
+    type_command(&mut app, "x", false).await;
+    app.on_key(code(KeyCode::Backspace)).await;
+    assert_eq!(app.mode, Mode::Command);
+    app.on_key(code(KeyCode::Backspace)).await;
+    assert_eq!(app.mode, Mode::Normal);
+}
+
+#[tokio::test]
+async fn q_and_help_and_unknown_commands() {
+    let mut app = demo_app().await;
+    type_command(&mut app, "help", true).await;
+    assert_eq!(app.mode, Mode::Help);
+    app.on_key(key('x')).await;
+    type_command(&mut app, "bogus", true).await;
+    assert!(
+        app.toast
+            .as_ref()
+            .is_some_and(|t| t.error && t.text.contains("bogus"))
+    );
+    assert!(!app.quit);
+    type_command(&mut app, "q", true).await;
+    assert!(app.quit);
+}
+
+#[tokio::test]
+async fn switch_asks_the_main_loop_to_change_app() {
+    let mut app = demo_app().await;
+    with_apps(&mut app);
+    type_command(&mut app, "switch teams", true).await;
+    assert_eq!(app.switch_to.as_deref(), Some("teams"));
+    assert_eq!(app.mode, Mode::Normal);
+}
+
+#[tokio::test]
+async fn switch_without_a_name_lists_apps_and_rejects_bad_ones() {
+    let mut app = demo_app().await;
+    with_apps(&mut app);
+    type_command(&mut app, "switch", true).await;
+    let t = app.toast.as_ref().unwrap();
+    assert!(
+        t.text.contains("slack*") && t.text.contains("teams"),
+        "{}",
+        t.text
+    );
+    type_command(&mut app, "switch slack", true).await;
+    assert!(app.toast.as_ref().unwrap().text.contains("Already"));
+    type_command(&mut app, "switch irc", true).await;
+    assert!(app.toast.as_ref().unwrap().error);
+    assert!(app.switch_to.is_none());
+}
+
+#[tokio::test]
+async fn switching_is_unavailable_without_configured_apps() {
+    let mut app = demo_app().await;
+    type_command(&mut app, "switch teams", true).await;
+    assert!(app.toast.as_ref().unwrap().error);
+    assert!(app.switch_to.is_none());
+}
+
+#[tokio::test]
+async fn tab_completes_commands_and_app_names() {
+    let mut app = demo_app().await;
+    with_apps(&mut app);
+    type_command(&mut app, "sw", false).await;
+    app.on_key(code(KeyCode::Tab)).await;
+    assert_eq!(app.command, "switch");
+    app.on_key(key(' ')).await;
+    app.on_key(key('t')).await;
+    app.on_key(code(KeyCode::Tab)).await;
+    assert_eq!(app.command, "switch teams");
+    // "s" is ambiguous (slack, signal): left alone.
+    app.command = "switch s".to_owned();
+    app.on_key(code(KeyCode::Tab)).await;
+    assert_eq!(app.command, "switch s");
 }

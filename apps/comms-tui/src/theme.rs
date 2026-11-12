@@ -17,7 +17,7 @@ pub struct Theme {
     pub muted: Color,
     /// Colours cycled through for other people's names.
     pub names: &'static [Color],
-    /// Workspace layout: a left rail (Home / DMs / Activity) and a thread pane,
+    /// Workspace layout: a left rail (Home / Activity / DMs / Channels) and a thread pane,
     /// like the Slack app.
     pub workspace_ui: bool,
 }

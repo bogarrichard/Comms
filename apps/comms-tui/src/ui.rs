@@ -18,7 +18,7 @@ use crate::theme::Theme;
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /// Odd inner width (this minus the border) so the tile and the name centre on the same column.
-const RAIL_WIDTH: u16 = 16;
+const RAIL_WIDTH: u16 = 22;
 /// Narrower than this and the workspace rail is dropped.
 const RAIL_MIN_TOTAL: u16 = 80;
 const THREAD_WIDTH: u16 = 38;
@@ -93,34 +93,39 @@ fn draw_rail(f: &mut Frame, app: &mut App, area: Rect) {
         .chars()
         .find(|c| c.is_alphanumeric())
         .map_or('S', |c| c.to_ascii_uppercase());
-    let tile_w = 7usize;
+    // 9x5 cells is about square (cells are twice as tall as wide) and
+    // centres exactly in the odd inner width.
+    let tile_w = 9usize;
+    let tile_h = 5usize;
+    let big = inner.height >= 12 && inner.width as usize >= tile_w;
     let pad = (inner.width as usize).saturating_sub(tile_w) / 2;
     let tile = Style::new().bg(t.accent).fg(Color::Black);
-    let blank = " ".repeat(tile_w);
     let has_icon = app.icon.is_some();
-    let mut lines: Vec<Line> = if has_icon {
-        // The icon image is drawn over these three rows afterwards.
-        vec![Line::raw(""), Line::raw(""), Line::raw("")]
-    } else {
-        vec![
-            Line::from(vec![
+    let mut lines: Vec<Line> = Vec::new();
+    if big {
+        for row in 0..tile_h {
+            if has_icon {
+                // The icon image is drawn over these rows afterwards.
+                lines.push(Line::raw(""));
+                continue;
+            }
+            let text = if row == tile_h / 2 {
+                let side = (tile_w - 1) / 2;
+                format!("{}{initial}{}", " ".repeat(side), " ".repeat(side))
+            } else {
+                " ".repeat(tile_w)
+            };
+            lines.push(Line::from(vec![
                 Span::raw(" ".repeat(pad)),
-                Span::styled(blank.clone(), tile),
-            ]),
-            Line::from(vec![
-                Span::raw(" ".repeat(pad)),
-                Span::styled(
-                    format!("   {initial}   "),
-                    tile.add_modifier(Modifier::BOLD),
-                ),
-            ]),
-            Line::from(vec![Span::raw(" ".repeat(pad)), Span::styled(blank, tile)]),
-        ]
-    };
+                Span::styled(text, tile.add_modifier(Modifier::BOLD)),
+            ]));
+        }
+        lines.push(Line::raw(""));
+    }
     lines.push(
         Line::from(Span::styled(
             truncate(&name, inner.width as usize),
-            Style::new().fg(t.muted),
+            Style::new().fg(t.muted).add_modifier(Modifier::BOLD),
         ))
         .alignment(Alignment::Center),
     );
@@ -128,13 +133,17 @@ fn draw_rail(f: &mut Frame, app: &mut App, area: Rect) {
 
     let active = app.rail_item();
     for item in crate::app::RailItem::ALL {
-        let mut label = format!(" {} {}", item.icon(), item.label());
-        if item == crate::app::RailItem::Activity && app.unread_count() > 0 {
-            label.push_str(&format!(" {}", app.unread_count()));
-        }
-        let label = truncate(&label, inner.width as usize);
-        let fill = (inner.width as usize).saturating_sub(label.width());
-        let text = format!("{label}{}", " ".repeat(fill));
+        let unread = app.unread_in(item);
+        // Label on the left, the unread count right-aligned.
+        let badge = if unread > 0 {
+            format!("{unread} ")
+        } else {
+            String::new()
+        };
+        let room = (inner.width as usize).saturating_sub(badge.width());
+        let label = truncate(&format!("  {}  {}", item.icon(), item.label()), room);
+        let fill = room.saturating_sub(label.width());
+        let text = format!("{label}{}{badge}", " ".repeat(fill));
         let style = if item == active {
             // Green under the cursor, blue when it is only where we are.
             let bg = if focused { t.accent } else { t.secondary };
@@ -148,14 +157,13 @@ fn draw_rail(f: &mut Frame, app: &mut App, area: Rect) {
         lines.push(Line::from(Span::styled(text, style)));
     }
     f.render_widget(Paragraph::new(lines), inner);
-    if let Some(icon) = app.icon.as_mut() {
-        // Cells are about twice as tall as wide, so 6x3 cells is square.
-        let w = 6u16.min(inner.width);
+    if let Some(icon) = app.icon.as_mut().filter(|_| big) {
+        let w = (tile_w as u16).min(inner.width);
         let rect = Rect {
             x: inner.x + (inner.width - w) / 2,
             y: inner.y,
             width: w,
-            height: 3,
+            height: tile_h as u16,
         };
         f.render_stateful_widget(ratatui_image::StatefulImage::default(), rect, icon);
     }
@@ -659,6 +667,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         Mode::Compose => (" INSERT ", Color::Green),
         Mode::Search => (" SEARCH ", Color::Yellow),
         Mode::Help => (" HELP ", Color::Cyan),
+        Mode::Command => (" COMMAND ", Color::Magenta),
     };
     let conn = match &app.connection {
         ConnectionStatus::Online => Span::styled("● online", Style::new().fg(Color::Green)),
@@ -702,6 +711,15 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         ),
         Span::raw(" "),
     ];
+    if app.mode == Mode::Command {
+        left.push(Span::raw(format!(":{}▏", app.command)));
+        f.render_widget(Paragraph::new(Line::from(left)), left_area);
+        f.render_widget(
+            Paragraph::new(right).alignment(Alignment::Right),
+            right_area,
+        );
+        return;
+    }
     match &app.toast {
         Some(t) => left.push(Span::styled(
             t.text.clone(),
@@ -753,6 +771,24 @@ fn draw_help(f: &mut Frame, app: &App, area: Rect) {
         ("Alt+Enter / Ctrl+J", "new line"),
         ("Esc", "stop writing (draft is kept)"),
         ("Ctrl+U", "clear"),
+    ] {
+        lines.push(Line::from(vec![
+            Span::styled(format!("{k:<22}"), Style::new().fg(Color::Cyan)),
+            Span::raw(d),
+        ]));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        "Commands (after the command key):",
+        Style::new().add_modifier(Modifier::BOLD),
+    ));
+    for (k, d) in [
+        (
+            "switch <app>",
+            "change app (Tab completes; no name lists them)",
+        ),
+        ("refresh", "refresh now"),
+        ("help / quit", "this help / leave"),
     ] {
         lines.push(Line::from(vec![
             Span::styled(format!("{k:<22}"), Style::new().fg(Color::Cyan)),
