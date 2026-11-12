@@ -28,7 +28,7 @@ pub use settings::{Backend, ChannelAccess, Paths, Settings, SignalSettings, Slac
 #[cfg(feature = "signal")]
 pub use signal::{signal_link, start_signal, valid_signal_account};
 #[cfg(feature = "slack")]
-pub use slack::{slack_workspace, start_slack};
+pub use slack::{save_slack_token, slack_login, slack_workspace, start_slack};
 #[cfg(feature = "teams")]
 pub use teams::{
     explain_auth_error, login, make_session, open_in_browser, start_graph, start_teams, teams_login,
@@ -153,6 +153,12 @@ pub async fn login_command(
 #[cfg(not(feature = "signal"))]
 pub async fn signal_link(_settings: &Settings, _say: impl Fn(&str)) -> Result<()> {
     Err(not_compiled("Signal", "signal"))
+}
+
+/// `comms slack-login`: verify a pasted token and store it.
+#[cfg(not(feature = "slack"))]
+pub async fn slack_login(_token: &str) -> Result<String> {
+    Err(not_compiled("Slack", "slack"))
 }
 
 /// A self-contained demo: fake data, in-memory storage, no network or credentials.

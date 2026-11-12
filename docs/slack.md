@@ -25,7 +25,12 @@ Slack throttles apps that are distributed commercially without Marketplace appro
          ]
        }
      },
-     "settings": { "org_deploy_enabled": false, "socket_mode_enabled": false, "token_rotation_enabled": false }
+     "settings": {
+       "org_deploy_enabled": false,
+       "socket_mode_enabled": false,
+       "is_hosted": false,
+       "token_rotation_enabled": false
+     }
    }
    ```
 
@@ -41,6 +46,10 @@ Everyone who uses the app repeats this: on **OAuth & Permissions**, copy the **U
 Anyone else in the workspace opens the same app's install link to authorise it and gets their own token.
 
 ## 3. Configure Comms
+
+**The easy way:** run `comms slack-login`, paste the token (it is not shown on screen) and press Enter. Comms checks it with Slack, then writes `provider = "slack"` and the token to `~/.config/comms/config.toml`, readable only by you, and leaves the rest of the file untouched. If `provider = "slack"` is already set and there is no token, plain `comms` offers the same prompt on start.
+
+By hand instead:
 
 Put the token in the environment, which keeps it out of files:
 

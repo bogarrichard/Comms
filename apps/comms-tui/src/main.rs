@@ -10,7 +10,7 @@ mod ui;
 #[cfg(test)]
 mod tests;
 
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -32,6 +32,7 @@ USAGE:
     comms --demo-slack        the same, with the Slack workspace layout and threads
     comms login               sign in with your browser
     comms login --device-code sign in with a code (for SSH / no browser)
+    comms slack-login         paste your Slack user token once (checked, then saved to the config)
     comms signal-link         link this computer to your Signal account (needs signal-cli)
     comms logout [--wipe-cache]
                               forget the stored sign-in (and delete cached messages)
@@ -89,6 +90,11 @@ async fn run() -> Result<()> {
             );
             return Ok(());
         }
+        Some("slack-login") => {
+            slack_setup().await?;
+            println!("Start the client with `comms`.");
+            return Ok(());
+        }
         Some("logout") => {
             let settings = Settings::load()?;
             for line in comms_bootstrap::logout(&settings, has("--wipe-cache")).await? {
@@ -100,7 +106,18 @@ async fn run() -> Result<()> {
         Some(other) => bail!("unknown argument `{other}`\n\n{HELP}"),
     }
 
-    let settings = Settings::load()?;
+    let mut settings = Settings::load()?;
+    // First start with Slack and no token yet: offer to set it up right here.
+    if !has("--demo")
+        && !has("--demo-slack")
+        && settings.provider == comms_bootstrap::Backend::Slack
+        && settings.slack.token.is_none()
+        && std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal()
+    {
+        slack_setup().await?;
+        settings = Settings::load()?;
+    }
     let keymap = KeyMap::new(&settings.keys)
         .map_err(|e| anyhow::anyhow!("invalid key configuration: {e}"))?;
     init_logging()?;
@@ -135,6 +152,61 @@ async fn run() -> Result<()> {
     let result = event_loop(&mut terminal, app, ws_rx).await;
     let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
     ratatui::restore();
+    result
+}
+
+/// Walk the user through giving Comms a Slack token: explain where to find
+/// it, read it without echoing, check it with Slack and save it.
+async fn slack_setup() -> Result<()> {
+    println!(
+        "Slack needs your User OAuth Token (starts with xoxp-).\n\
+         Create the app from the manifest in docs/slack.md (api.slack.com/apps), install it,\n\
+         then copy the token from OAuth & Permissions. Not the xoxb- or xapp- ones.\n"
+    );
+    let token = read_secret("Token (input is hidden, Esc cancels): ")?;
+    let who = comms_bootstrap::slack_login(&token).await?;
+    println!(
+        "Signed in to Slack as {who}. Saved to {} (readable only by you).",
+        Paths::discover()?.config_file.display()
+    );
+    Ok(())
+}
+
+/// Read a line from the terminal without echoing it. Pasting works.
+fn read_secret(prompt: &str) -> Result<String> {
+    use crossterm::event::{self, KeyCode, KeyEventKind, KeyModifiers};
+    use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+
+    fn read_loop() -> Result<String> {
+        let mut buf = String::new();
+        loop {
+            match event::read()? {
+                Event::Paste(s) => buf.push_str(s.trim()),
+                Event::Key(k) if k.kind != KeyEventKind::Release => match k.code {
+                    KeyCode::Enter => return Ok(buf),
+                    KeyCode::Esc => bail!("cancelled"),
+                    KeyCode::Char('c' | 'd') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        bail!("cancelled")
+                    }
+                    KeyCode::Backspace => {
+                        buf.pop();
+                    }
+                    KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => buf.push(c),
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+    }
+
+    print!("{prompt}");
+    std::io::stdout().flush()?;
+    enable_raw_mode()?;
+    let _ = crossterm::execute!(std::io::stdout(), EnableBracketedPaste);
+    let result = read_loop();
+    let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
+    let _ = disable_raw_mode();
+    println!();
     result
 }
 
