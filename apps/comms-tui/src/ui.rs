@@ -389,24 +389,45 @@ fn message_lines(
     theme: &Theme,
     threaded: bool,
 ) -> Vec<Line<'static>> {
+    message_layout(msgs, width, theme, threaded).0
+}
+
+/// One message's place in the laid-out lines: the index into the input
+/// slice and the `start..end` line range (end exclusive).
+type MessageSpan = (usize, usize, usize);
+
+/// Every line starts with a one-column gutter, where the chat draws the
+/// selection bar.
+fn message_layout(
+    msgs: &[Message],
+    width: usize,
+    theme: &Theme,
+    threaded: bool,
+) -> (Vec<Line<'static>>, Vec<MessageSpan>) {
+    let width = width.saturating_sub(1);
     let accent = theme.accent;
     let muted = theme.muted;
     let all = msgs;
     let in_list = |id: &RemoteId| msgs.iter().any(|m| m.remote_id.as_ref() == Some(id));
-    let msgs: Vec<&Message> = msgs
+    let msgs: Vec<(usize, &Message)> = msgs
         .iter()
-        .filter(|m| !(threaded && m.reply_to.as_ref().is_some_and(in_list)))
+        .enumerate()
+        .filter(|(_, m)| !(threaded && m.reply_to.as_ref().is_some_and(in_list)))
         .collect();
+    let mut spans: Vec<MessageSpan> = Vec::new();
     let mut out: Vec<Line<'static>> = Vec::new();
     let mut last_day: Option<NaiveDate> = None;
     let body_w = width.saturating_sub(2).max(1);
-    for m in msgs.iter().copied() {
+    for (orig, m) in msgs.iter().copied() {
         let local = m.timestamp.with_timezone(&Local);
+        // A message that opens a new day owns that day's heading line.
+        let mut heading_at = None;
         if last_day != Some(local.date_naive()) {
             last_day = Some(local.date_naive());
             if !out.is_empty() {
                 out.push(Line::raw(""));
             }
+            heading_at = Some(out.len());
             out.push(
                 Line::from(Span::styled(
                     format!("── {} ──", local.format("%a %e %b %Y")),
@@ -458,6 +479,7 @@ fn message_lines(
                 Style::new().fg(Color::Red),
             )),
         }
+        let start = heading_at.unwrap_or(out.len());
         out.push(Line::from(head));
 
         let mut body: Vec<Line<'static>> = if m.deleted_at.is_some() {
@@ -510,10 +532,14 @@ fn message_lines(
                 ]));
             }
         }
+        spans.push((orig, start, out.len()));
         out.push(Line::raw(""));
     }
     out.pop();
-    out
+    for line in &mut out {
+        line.spans.insert(0, Span::raw(" "));
+    }
+    (out, spans)
 }
 
 fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
@@ -595,7 +621,7 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
                 inner,
             );
         } else {
-            let lines = message_lines(
+            let (mut lines, spans) = message_layout(
                 &app.messages,
                 inner.width as usize,
                 &app.theme,
@@ -603,7 +629,32 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
             );
             let h = inner.height as usize;
             app.max_scroll = lines.len().saturating_sub(h);
+            // The selected message's lines.
+            let selected = app
+                .cursor
+                .and_then(|id| app.messages.iter().position(|m| m.id == id))
+                .and_then(|i| spans.iter().find(|(o, ..)| *o == i))
+                .map(|&(_, s, e)| (s, e));
+            if app.reveal_cursor {
+                app.reveal_cursor = false;
+                if let Some((s, e)) = selected {
+                    let end = lines.len() - app.scroll.min(app.max_scroll);
+                    let first = end.saturating_sub(h);
+                    if e > end {
+                        app.scroll = lines.len() - e;
+                    } else if s < first {
+                        app.scroll = lines.len() - (s + h).min(lines.len());
+                    }
+                }
+            }
             app.scroll = app.scroll.min(app.max_scroll);
+            if app.focus == Focus::Messages
+                && let Some((s, e)) = selected
+            {
+                for line in &mut lines[s..e] {
+                    line.spans[0] = Span::styled("▌", Style::new().fg(app.theme.accent));
+                }
+            }
             let end = lines.len() - app.scroll;
             let start = end.saturating_sub(h);
             f.render_widget(Paragraph::new(lines[start..end].to_vec()), inner);
@@ -729,23 +780,46 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
                 app.theme.accent
             }),
         )),
-        None => left.push(Span::styled(
-            format!(
-                "{} help · {} search · {} filter · {} thread · {} quit",
-                app.keymap.labels(Action::Help),
-                app.keymap.labels(Action::Search),
-                app.keymap.labels(Action::NextFilter),
-                app.keymap.labels(Action::Thread),
-                app.keymap.labels(Action::Quit),
-            ),
-            Style::new().fg(Color::DarkGray),
-        )),
+        None => left.push(Span::styled(hints(app), Style::new().fg(Color::DarkGray))),
     }
     f.render_widget(Paragraph::new(Line::from(left)), left_area);
     f.render_widget(
         Paragraph::new(right).alignment(Alignment::Right),
         right_area,
     );
+}
+
+/// The keys that matter right now, for the status bar.
+fn hints(app: &App) -> String {
+    let k = |a: Action| app.keymap.labels(a);
+    match (app.mode, app.focus) {
+        (Mode::Compose, _) => "Enter send · Alt+Enter new line · Esc stop writing".to_owned(),
+        (Mode::Search, _) => "type to filter · Enter keep · Esc clear".to_owned(),
+        (_, Focus::Rail) => format!(
+            "{} choose · {} back to the list · {} help",
+            k(Action::Down),
+            k(Action::FocusRight),
+            k(Action::Help)
+        ),
+        (_, Focus::Sidebar) => format!(
+            "{} open · {} search · {} filter · {} command · {} help · {} quit",
+            k(Action::Open),
+            k(Action::Search),
+            k(Action::NextFilter),
+            k(Action::Command),
+            k(Action::Help),
+            k(Action::Quit)
+        ),
+        (_, Focus::Messages) => format!(
+            "{} select · {} write · {} thread · {} older · {} list · {} help",
+            k(Action::Down),
+            k(Action::Compose),
+            k(Action::Thread),
+            k(Action::LoadOlder),
+            k(Action::FocusLeft),
+            k(Action::Help)
+        ),
+    }
 }
 
 fn draw_help(f: &mut Frame, app: &App, area: Rect) {

@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use comms_app::{AppEvent, AppHandle, Command, ConnectionStatus};
-use comms_domain::{Conversation, ConversationId, ConversationKind, Message, RemoteId, SendState};
+use comms_domain::{
+    Conversation, ConversationId, ConversationKind, Message, MessageId, RemoteId, SendState,
+};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::input::InputBuffer;
@@ -165,6 +167,10 @@ pub struct App {
     pub picker: Option<ratatui_image::picker::Picker>,
     /// The workspace icon, ready to draw in the rail tile.
     pub icon: Option<ratatui_image::protocol::StatefulProtocol>,
+    /// The selected message of the open conversation (`j`/`k` in the chat).
+    pub cursor: Option<MessageId>,
+    /// Set when the cursor moved: the renderer scrolls it into view once.
+    pub reveal_cursor: bool,
     /// The text after `:` while in command mode.
     pub command: String,
     /// Set by `:switch`; the main loop performs the switch and clears it.
@@ -211,6 +217,8 @@ impl App {
             workspace: None,
             picker: None,
             icon: None,
+            cursor: None,
+            reveal_cursor: false,
             command: String::new(),
             switch_to: None,
             apps: Vec::new(),
@@ -230,6 +238,64 @@ impl App {
         {
             self.icon = Some(picker.new_resize_protocol(img));
         }
+    }
+
+    /// Indices into `messages` of the messages the chat pane shows (with the
+    /// thread layout, replies live in the thread pane instead).
+    pub fn displayed(&self) -> Vec<usize> {
+        let threaded = self.theme.workspace_ui;
+        let in_list = |id: &RemoteId| {
+            self.messages
+                .iter()
+                .any(|m| m.remote_id.as_ref() == Some(id))
+        };
+        self.messages
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| !(threaded && m.reply_to.as_ref().is_some_and(in_list)))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    fn cursor_position(&self, shown: &[usize]) -> Option<usize> {
+        let id = self.cursor?;
+        shown.iter().position(|&i| self.messages[i].id == id)
+    }
+
+    /// The selected message, when there is one.
+    pub fn cursor_message(&self) -> Option<&Message> {
+        let id = self.cursor?;
+        self.messages.iter().find(|m| m.id == id)
+    }
+
+    fn cursor_at_end(&self) -> bool {
+        let shown = self.displayed();
+        match (self.cursor_position(&shown), shown.len()) {
+            (_, 0) | (None, _) => true,
+            (Some(p), n) => p + 1 == n,
+        }
+    }
+
+    fn cursor_to_end(&mut self) {
+        let shown = self.displayed();
+        self.cursor = shown.last().map(|&i| self.messages[i].id);
+    }
+
+    /// Select the previous/next message (`delta` messages away), or the first
+    /// or last one with `isize::MIN` / `isize::MAX`.
+    fn move_cursor(&mut self, delta: isize) {
+        let shown = self.displayed();
+        if shown.is_empty() {
+            return;
+        }
+        let pos = self.cursor_position(&shown).unwrap_or(shown.len() - 1);
+        if delta < 0 && pos == 0 {
+            // Already on the oldest loaded message: ask for older history.
+            self.request_older();
+        }
+        let next = pos.saturating_add_signed(delta).min(shown.len() - 1);
+        self.cursor = Some(self.messages[shown[next]].id);
+        self.reveal_cursor = true;
     }
 
     pub fn visible(&self) -> Vec<&Conversation> {
@@ -317,6 +383,21 @@ impl App {
         if self.thread.take().is_some() {
             return;
         }
+        // With a message selected, open that message's own thread.
+        if self.focus == Focus::Messages
+            && let Some(id) = self.cursor_message().and_then(|m| m.remote_id.clone())
+        {
+            if self
+                .messages
+                .iter()
+                .any(|r| r.reply_to.as_ref() == Some(&id))
+            {
+                self.thread = Some(id);
+            } else {
+                self.toast("This message has no replies (] / [ browse threads)", false);
+            }
+            return;
+        }
         match self.threads().pop() {
             Some((root, _)) => self.thread = Some(root),
             None => self.toast("No threads in this conversation", false),
@@ -394,9 +475,16 @@ impl App {
     pub async fn refresh_messages(&mut self) {
         let Some(open) = &self.open else { return };
         let id = open.id;
+        // A cursor on the newest message keeps following new arrivals.
+        let follow = self.cursor_at_end();
         match self.handle.messages(id, self.view_limit).await {
             Ok(m) => self.messages = m,
             Err(e) => self.toast(format!("Could not read messages: {e}"), true),
+        }
+        let shown = self.displayed();
+        if follow || self.cursor_position(&shown).is_none() {
+            self.cursor_to_end();
+            self.reveal_cursor = self.scroll == 0;
         }
         self.has_older = self.handle.has_older(id).await.unwrap_or(false);
     }
@@ -411,6 +499,7 @@ impl App {
             }
             self.input = self.drafts.remove(&conv.id).unwrap_or_default();
             self.messages.clear();
+            self.cursor = None;
             self.thread = None;
             self.view_limit = INITIAL_VIEW;
             self.loading_older = false;
@@ -697,6 +786,10 @@ impl App {
             Action::Bottom if self.focus == Focus::Sidebar => {
                 self.selected = self.visible().len().saturating_sub(1);
             }
+            Action::Down if self.focus == Focus::Messages => self.move_cursor(1),
+            Action::Up if self.focus == Focus::Messages => self.move_cursor(-1),
+            Action::Top if self.focus == Focus::Messages => self.move_cursor(isize::MIN),
+            Action::Bottom if self.focus == Focus::Messages => self.move_cursor(isize::MAX),
             Action::Down => self.scroll_by(1),
             Action::Up => self.scroll_by(-1),
             Action::PageDown => self.scroll_by(page),

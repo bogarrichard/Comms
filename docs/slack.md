@@ -85,8 +85,13 @@ With Slack the window looks like the Slack app: a **rail** on the far left (the 
 |---|---|
 | `h` / `Esc` in the list | move to the rail (`j`/`k` choose Home, Activity, DMs or Channels; `l` / `Enter` returns to the list) |
 | Home / Activity / DMs / Channels | everything / conversations with unread messages / direct and group messages / channels (the number is how many conversations there have unread messages) |
-| `t` | open or close the thread pane (starts with the newest thread) |
+| `Ctrl+h` / `Ctrl+l` | move one panel left / right (chat, list, rail) |
+| `j` / `k` in the chat | select the next / previous message (a green bar marks it; `g` / `G` jump to the oldest / newest); the selection follows new messages while it is on the newest one |
+| `t` | with a message selected: open or close **its** thread; `]` / `[` browse the other threads |
+| `:` | command line: `:switch <app>`, `:refresh`, `:help`, `:q` (Tab completes) |
 | `]` / `[` | next / previous thread |
+
+The bar at the bottom always shows the keys that work in the panel you are in.
 
 Replies are folded into an "N replies" line under their thread's first message and shown in the pane. The rail needs 80 columns; under that it is dropped, and on terminals too narrow for chat and pane side by side the pane replaces the chat. Teams and Signal keep the plain two-panel layout.
 

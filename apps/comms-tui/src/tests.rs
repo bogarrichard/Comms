@@ -315,15 +315,18 @@ async fn scrolling_stays_within_bounds() {
     settle(&mut app, |a| a.messages.len() == 4).await;
     let _ = screen(&mut app, 60, 14); // short body so there is something to scroll
     assert!(app.max_scroll > 0);
+    // j/k move the message cursor; the renderer scrolls it into view.
     for _ in 0..50 {
         app.on_key(key('k')).await;
     }
-    assert_eq!(app.scroll, app.max_scroll);
     let s = screen(&mut app, 60, 14);
+    assert_eq!(app.scroll, app.max_scroll);
     assert!(s.contains("Did you see"), "{s}");
     app.on_key(key('G')).await;
+    let _ = screen(&mut app, 60, 14);
     assert_eq!(app.scroll, 0);
     app.on_key(key('g')).await;
+    let _ = screen(&mut app, 60, 14);
     assert_eq!(app.scroll, app.max_scroll);
 }
 
@@ -531,6 +534,21 @@ async fn the_rail_filters_the_conversation_list() {
     assert_eq!(app.focus, Focus::Sidebar);
 }
 
+/// Move the message cursor (with `k`) to the first message that has replies.
+async fn select_threaded_message(app: &mut App) {
+    for _ in 0..20 {
+        let has_replies = app
+            .cursor_message()
+            .and_then(|m| m.remote_id.clone())
+            .is_some_and(|id| app.threads().iter().any(|(r, _)| *r == id));
+        if has_replies {
+            return;
+        }
+        app.on_key(key('k')).await;
+    }
+    panic!("no threaded message found");
+}
+
 #[tokio::test]
 async fn the_thread_pane_opens_beside_the_chat_and_replies_leave_the_channel_view() {
     let mut app = slack_app().await;
@@ -542,6 +560,7 @@ async fn the_thread_pane_opens_beside_the_chat_and_replies_leave_the_channel_vie
     assert!(!s.contains("Which folder should"), "replies hidden: {s}");
     assert!(!s.contains("Thread"), "pane closed: {s}");
 
+    select_threaded_message(&mut app).await;
     app.on_key(key('t')).await;
     assert!(app.thread.is_some());
     let s = screen(&mut app, 120, 30);
@@ -564,6 +583,7 @@ async fn threads_can_be_stepped_and_are_reset_when_switching_conversation() {
     let mut app = slack_app().await;
     open_title(&mut app, "general").await;
     assert_eq!(app.threads().len(), 1);
+    select_threaded_message(&mut app).await;
     app.on_key(key('t')).await;
     let first = app.thread.clone();
     assert!(first.is_some());
@@ -582,8 +602,8 @@ async fn threads_can_be_stepped_and_are_reset_when_switching_conversation() {
     assert!(
         app.toast
             .as_ref()
-            .is_some_and(|t| t.text.contains("No threads")),
-        "a conversation without threads says so"
+            .is_some_and(|t| t.text.contains("no replies")),
+        "a message without replies says so"
     );
 }
 
@@ -591,6 +611,7 @@ async fn threads_can_be_stepped_and_are_reset_when_switching_conversation() {
 async fn on_a_narrower_terminal_the_thread_replaces_the_chat_and_the_rail_goes() {
     let mut app = slack_app().await;
     open_title(&mut app, "lab-notes").await;
+    select_threaded_message(&mut app).await;
     app.on_key(key('t')).await;
 
     // 90 columns: rail yes, but the chat cannot keep 40 columns beside a pane.
@@ -742,4 +763,78 @@ async fn tab_completes_commands_and_app_names() {
     app.command = "switch s".to_owned();
     app.on_key(code(KeyCode::Tab)).await;
     assert_eq!(app.command, "switch s");
+}
+
+#[tokio::test]
+async fn the_cursor_starts_on_the_newest_message_and_moves_with_j_and_k() {
+    let mut app = slack_app().await;
+    open_title(&mut app, "lab-notes").await;
+    let shown = app.displayed();
+    let newest = app.messages[*shown.last().unwrap()].id;
+    assert_eq!(app.cursor, Some(newest));
+
+    app.on_key(key('k')).await;
+    assert_ne!(app.cursor, Some(newest));
+    app.on_key(key('j')).await;
+    assert_eq!(app.cursor, Some(newest));
+    // At the newest message `j` stays put; replies hidden in a thread are skipped.
+    app.on_key(key('j')).await;
+    assert_eq!(app.cursor, Some(newest));
+    for idx in app.displayed() {
+        let m = &app.messages[idx];
+        assert!(
+            m.reply_to.is_none()
+                || !app
+                    .messages
+                    .iter()
+                    .any(|r| r.remote_id.as_ref() == m.reply_to.as_ref())
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_selected_message_gets_a_gutter_bar_only_while_the_chat_has_focus() {
+    let mut app = slack_app().await;
+    open_title(&mut app, "lab-notes").await;
+    let s = screen(&mut app, 120, 30);
+    assert!(s.contains("▌"), "{s}");
+    let bars = s.lines().filter(|l| l.contains("▌")).count();
+    assert!(bars >= 1);
+
+    app.on_key(code(KeyCode::Esc)).await; // back to the list
+    let s = screen(&mut app, 120, 30);
+    assert!(!s.contains("▌"), "{s}");
+}
+
+#[tokio::test]
+async fn moving_the_cursor_up_scrolls_the_chat_to_keep_it_visible() {
+    let mut app = slack_app().await;
+    open_title(&mut app, "lab-notes").await;
+    // A short window so the oldest message is off screen.
+    let _ = screen(&mut app, 120, 12);
+    assert_eq!(app.scroll, 0);
+    for _ in 0..30 {
+        app.on_key(key('k')).await;
+    }
+    let s = screen(&mut app, 120, 12);
+    let first = app.displayed()[0];
+    assert_eq!(app.cursor, Some(app.messages[first].id));
+    assert!(app.scroll > 0, "scrolled up to the oldest: {s}");
+    assert!(s.contains("▌"), "{s}");
+}
+
+#[tokio::test]
+async fn the_status_bar_shows_the_keys_that_work_where_you_are() {
+    let mut app = slack_app().await;
+    let s = screen(&mut app, 120, 30);
+    assert!(s.contains("open") && s.contains("search"), "{s}");
+    open_title(&mut app, "lab-notes").await;
+    let s = screen(&mut app, 120, 30);
+    assert!(
+        s.contains("select") && s.contains("thread") && !s.contains("search"),
+        "{s}"
+    );
+    app.on_key(key('i')).await;
+    let s = screen(&mut app, 120, 30);
+    assert!(s.contains("Alt+Enter new line"), "{s}");
 }
