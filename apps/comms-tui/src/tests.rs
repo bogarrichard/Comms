@@ -436,3 +436,192 @@ async fn unknown_backends_fall_back_to_the_neutral_look() {
     let s = screen(&mut app, 100, 30);
     assert!(s.contains("Comms · All"), "{s}");
 }
+
+// ---------------------------------------------------------------- Slack layout
+
+async fn slack_app() -> App {
+    let store = comms_storage::Store::open_in_memory().await.unwrap();
+    let handle = comms_app::AppHandle::start(
+        std::sync::Arc::new(comms_testkit::FakeProvider::demo_slack()),
+        store,
+        comms_app::CoreConfig::default(),
+    )
+    .await
+    .unwrap();
+    let mut app = App::new(handle, KeyMap::default_map()).await;
+    settle(&mut app, |a| a.convs.len() >= 6).await;
+    app
+}
+
+/// Open the conversation with this title through the real key path.
+async fn open_title(app: &mut App, title: &str) {
+    app.focus = Focus::Sidebar;
+    let idx = app
+        .visible()
+        .iter()
+        .position(|c| c.title == title)
+        .unwrap_or_else(|| panic!("no conversation {title}"));
+    app.selected = idx;
+    app.on_key(code(KeyCode::Enter)).await;
+    let want = title.to_owned();
+    settle(app, |a| {
+        a.open.as_ref().is_some_and(|c| c.title == want) && !a.messages.is_empty()
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn slack_shows_the_workspace_rail_with_home_dms_and_activity() {
+    let mut app = slack_app().await;
+    assert_eq!(app.theme, crate::theme::Theme::SLACK);
+    let s = screen(&mut app, 110, 30);
+    assert!(
+        s.contains("Home") && s.contains("DMs") && s.contains("Activity"),
+        "{s}"
+    );
+    // The workspace tile carries the initial, drawn in the accent colour.
+    let tile = row_colours(&mut app, "  S  ");
+    assert!(
+        tile.contains(&crate::theme::Theme::SLACK.accent),
+        "{tile:?}"
+    );
+    // Activity shows how many conversations have unread messages.
+    assert!(app.unread_count() >= 1);
+    assert!(
+        s.contains(&format!("Activity {}", app.unread_count())),
+        "{s}"
+    );
+    assert!(app.rail_visible);
+}
+
+#[tokio::test]
+async fn the_rail_filters_the_conversation_list() {
+    let mut app = slack_app().await;
+    let _ = screen(&mut app, 110, 30); // the renderer decides whether the rail fits
+    // Esc/h from the list moves to the rail.
+    app.on_key(key('h')).await;
+    assert_eq!(app.focus, Focus::Rail);
+
+    app.on_key(key('j')).await; // DMs
+    let s = screen(&mut app, 110, 30);
+    assert!(s.contains("Anna Kovács") && !s.contains("# general"), "{s}");
+
+    app.on_key(key('j')).await; // Activity = unread only
+    assert!(app.visible().iter().all(|c| c.unread));
+    assert!(!app.visible().is_empty());
+
+    app.on_key(key('k')).await;
+    app.on_key(key('k')).await; // Home
+    assert!(app.visible().len() >= 6);
+
+    // Enter/l goes back into the list.
+    app.on_key(code(KeyCode::Enter)).await;
+    assert_eq!(app.focus, Focus::Sidebar);
+}
+
+#[tokio::test]
+async fn the_thread_pane_opens_beside_the_chat_and_replies_leave_the_channel_view() {
+    let mut app = slack_app().await;
+    open_title(&mut app, "lab-notes").await;
+
+    // Before opening: replies are folded into "N replies" under their root.
+    let s = screen(&mut app, 120, 30);
+    assert!(s.contains("4 replies"), "{s}");
+    assert!(!s.contains("Which folder should"), "replies hidden: {s}");
+    assert!(!s.contains("Thread"), "pane closed: {s}");
+
+    app.on_key(key('t')).await;
+    assert!(app.thread.is_some());
+    let s = screen(&mut app, 120, 30);
+    assert!(s.contains("Thread") && s.contains("4 replies"), "{s}");
+    assert!(
+        s.contains("Please upload") && s.contains("Which folder should"),
+        "root and replies are in the pane: {s}"
+    );
+    assert!(s.contains("run 7 is uploaded"), "{s}");
+
+    // `t` again closes it.
+    app.on_key(key('t')).await;
+    assert!(app.thread.is_none());
+    let s = screen(&mut app, 120, 30);
+    assert!(!s.contains("Thread"), "{s}");
+}
+
+#[tokio::test]
+async fn threads_can_be_stepped_and_are_reset_when_switching_conversation() {
+    let mut app = slack_app().await;
+    open_title(&mut app, "general").await;
+    assert_eq!(app.threads().len(), 1);
+    app.on_key(key('t')).await;
+    let first = app.thread.clone();
+    assert!(first.is_some());
+    // Only one thread: stepping stays on it.
+    app.on_key(key(']')).await;
+    app.on_key(key('[')).await;
+    assert_eq!(app.thread, first);
+
+    open_title(&mut app, "random").await;
+    assert!(
+        app.thread.is_none(),
+        "thread pane closes with the conversation"
+    );
+    app.on_key(key('t')).await;
+    assert!(app.thread.is_none());
+    assert!(
+        app.toast
+            .as_ref()
+            .is_some_and(|t| t.text.contains("No threads")),
+        "a conversation without threads says so"
+    );
+}
+
+#[tokio::test]
+async fn on_a_narrower_terminal_the_thread_replaces_the_chat_and_the_rail_goes() {
+    let mut app = slack_app().await;
+    open_title(&mut app, "lab-notes").await;
+    app.on_key(key('t')).await;
+
+    // 90 columns: rail yes, but the chat cannot keep 40 columns beside a pane.
+    let s = screen(&mut app, 90, 30);
+    assert!(s.contains("Home"), "{s}");
+    assert!(s.contains("Thread") && s.contains("Which folder"), "{s}");
+
+    // Under 80 columns the rail is dropped and focus cannot be stuck on it.
+    app.focus = Focus::Rail;
+    let s = screen(&mut app, 76, 24);
+    assert!(!s.contains("Activity"), "{s}");
+    assert!(!app.rail_visible);
+    assert_ne!(app.focus, Focus::Rail);
+}
+
+#[tokio::test]
+async fn teams_and_signal_keep_their_single_sidebar_layout() {
+    for kind in ["msgraph", "signal"] {
+        let mut app = app_for(kind).await;
+        let s = screen(&mut app, 110, 30);
+        assert!(!s.contains("Activity") && !s.contains("DMs"), "{kind}: {s}");
+        assert!(!app.rail_visible);
+        // `h` does nothing special without a rail.
+        app.focus = Focus::Sidebar;
+        app.on_key(key('h')).await;
+        assert_eq!(app.focus, Focus::Sidebar);
+    }
+}
+
+#[tokio::test]
+async fn slack_uses_green_blue_grey_for_selection_and_thread_markers() {
+    use crate::theme::Theme;
+    let mut app = slack_app().await;
+    open_title(&mut app, "lab-notes").await;
+    app.focus = Focus::Sidebar;
+    let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    term.draw(|f| ui::draw(f, &mut app)).unwrap();
+    let buf = term.backend().buffer().clone();
+    let bgs: Vec<_> = buf.content().iter().map(|c| c.bg).collect();
+    // Selected conversation row and active rail item use the blue.
+    assert!(bgs.contains(&Theme::SLACK.secondary));
+    // The "N replies" marker is blue, timestamps are grey.
+    let marker = row_colours(&mut app, "4 replies");
+    assert!(marker.contains(&Theme::SLACK.secondary), "{marker:?}");
+    assert!(marker.contains(&Theme::SLACK.muted), "{marker:?}");
+}

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use comms_app::{AppEvent, AppHandle, Command, ConnectionStatus};
-use comms_domain::{Conversation, ConversationId, ConversationKind, Message, SendState};
+use comms_domain::{Conversation, ConversationId, ConversationKind, Message, RemoteId, SendState};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::input::InputBuffer;
@@ -22,6 +22,8 @@ pub enum Mode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
+    /// The left rail of the workspace layout (Home / DMs / Activity).
+    Rail,
     Sidebar,
     Messages,
 }
@@ -31,6 +33,8 @@ pub enum Filter {
     All,
     Chats,
     Channels,
+    /// Conversations with unread messages (the rail's "Activity").
+    Unread,
 }
 
 impl Filter {
@@ -39,6 +43,7 @@ impl Filter {
             Filter::All => "All",
             Filter::Chats => "Chats",
             Filter::Channels => "Channels",
+            Filter::Unread => "Unread",
         }
     }
 
@@ -46,7 +51,7 @@ impl Filter {
         match self {
             Filter::All => Filter::Chats,
             Filter::Chats => Filter::Channels,
-            Filter::Channels => Filter::All,
+            Filter::Channels | Filter::Unread => Filter::All,
         }
     }
 
@@ -55,6 +60,51 @@ impl Filter {
             Filter::All => true,
             Filter::Chats => c.kind != ConversationKind::Channel,
             Filter::Channels => c.kind == ConversationKind::Channel,
+            Filter::Unread => c.unread,
+        }
+    }
+}
+
+/// An entry of the workspace rail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RailItem {
+    Home,
+    Dms,
+    Activity,
+}
+
+impl RailItem {
+    pub const ALL: [RailItem; 3] = [RailItem::Home, RailItem::Dms, RailItem::Activity];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            RailItem::Home => "Home",
+            RailItem::Dms => "DMs",
+            RailItem::Activity => "Activity",
+        }
+    }
+
+    pub fn icon(self) -> &'static str {
+        match self {
+            RailItem::Home => "⌂",
+            RailItem::Dms => "›",
+            RailItem::Activity => "●",
+        }
+    }
+
+    fn filter(self) -> Filter {
+        match self {
+            RailItem::Home => Filter::All,
+            RailItem::Dms => Filter::Chats,
+            RailItem::Activity => Filter::Unread,
+        }
+    }
+
+    fn of(filter: Filter) -> Self {
+        match filter {
+            Filter::All | Filter::Channels => RailItem::Home,
+            Filter::Chats => RailItem::Dms,
+            Filter::Unread => RailItem::Activity,
         }
     }
 }
@@ -92,6 +142,11 @@ pub struct App {
     loading_older: bool,
     pub quit: bool,
     pub tick: u64,
+    /// Root message (remote id) of the thread shown in the thread pane;
+    /// `None` = pane closed.
+    pub thread: Option<RemoteId>,
+    /// Set by the renderer: whether the rail is on screen (it needs width).
+    pub rail_visible: bool,
 }
 
 const INITIAL_VIEW: u32 = 300;
@@ -125,6 +180,8 @@ impl App {
             loading_older: false,
             quit: false,
             tick: 0,
+            thread: None,
+            rail_visible: false,
         };
         // Local-first: show whatever is cached before any network answer.
         app.refresh_conversations().await;
@@ -144,6 +201,101 @@ impl App {
                         .is_some_and(|g| g.to_lowercase().contains(&q))
             })
             .collect()
+    }
+
+    /// Which rail entry is active.
+    pub fn rail_item(&self) -> RailItem {
+        RailItem::of(self.filter)
+    }
+
+    /// Number of conversations with unread messages (the Activity badge).
+    pub fn unread_count(&self) -> usize {
+        self.convs.iter().filter(|c| c.unread).count()
+    }
+
+    /// Name shown under the workspace tile: the group of the first
+    /// conversation that has one, otherwise the service name.
+    pub fn workspace_name(&self) -> String {
+        self.convs
+            .iter()
+            .find_map(|c| c.group.clone())
+            .unwrap_or_else(|| self.theme.name.to_owned())
+    }
+
+    /// Threads in the open conversation as `(root, replies)`, the one with the
+    /// oldest latest reply first.
+    pub fn threads(&self) -> Vec<(RemoteId, usize)> {
+        let mut found: Vec<(RemoteId, usize, usize)> = Vec::new();
+        for (i, m) in self.messages.iter().enumerate() {
+            let Some(root) = &m.reply_to else { continue };
+            if m.deleted_at.is_some() {
+                continue;
+            }
+            match found.iter_mut().find(|(r, ..)| r == root) {
+                Some(entry) => {
+                    entry.1 += 1;
+                    entry.2 = i;
+                }
+                None => found.push((root.clone(), 1, i)),
+            }
+        }
+        found.sort_by_key(|(_, _, last)| *last);
+        found.into_iter().map(|(r, n, _)| (r, n)).collect()
+    }
+
+    /// The root message of the open thread, if it is loaded.
+    pub fn thread_root(&self) -> Option<&Message> {
+        let root = self.thread.as_ref()?;
+        self.messages
+            .iter()
+            .find(|m| m.remote_id.as_ref() == Some(root))
+    }
+
+    /// The replies of the open thread, oldest first.
+    pub fn thread_replies(&self) -> Vec<&Message> {
+        let Some(root) = &self.thread else {
+            return vec![];
+        };
+        self.messages
+            .iter()
+            .filter(|m| m.reply_to.as_ref() == Some(root))
+            .collect()
+    }
+
+    fn toggle_thread(&mut self) {
+        if self.thread.take().is_some() {
+            return;
+        }
+        match self.threads().pop() {
+            Some((root, _)) => self.thread = Some(root),
+            None => self.toast("No threads in this conversation", false),
+        }
+    }
+
+    fn step_thread(&mut self, delta: isize) {
+        let threads = self.threads();
+        if threads.is_empty() {
+            return self.toast("No threads in this conversation", false);
+        }
+        let current = self
+            .thread
+            .as_ref()
+            .and_then(|t| threads.iter().position(|(r, _)| r == t));
+        let next = match current {
+            Some(i) => i.saturating_add_signed(delta).min(threads.len() - 1),
+            None => threads.len() - 1,
+        };
+        self.thread = Some(threads[next].0.clone());
+    }
+
+    fn rail_move(&mut self, delta: isize) {
+        let i = RailItem::ALL
+            .iter()
+            .position(|r| *r == self.rail_item())
+            .unwrap_or(0);
+        let next = i.saturating_add_signed(delta).min(RailItem::ALL.len() - 1);
+        self.filter = RailItem::ALL[next].filter();
+        self.selected = 0;
     }
 
     pub fn toast(&mut self, text: impl Into<String>, error: bool) {
@@ -208,6 +360,7 @@ impl App {
             }
             self.input = self.drafts.remove(&conv.id).unwrap_or_default();
             self.messages.clear();
+            self.thread = None;
             self.view_limit = INITIAL_VIEW;
             self.loading_older = false;
         }
@@ -395,6 +548,8 @@ impl App {
         let page = 10isize;
         match action {
             Action::Quit => self.quit = true,
+            Action::Down if self.focus == Focus::Rail => self.rail_move(1),
+            Action::Up if self.focus == Focus::Rail => self.rail_move(-1),
             Action::Down if self.focus == Focus::Sidebar => self.move_selection(1),
             Action::Up if self.focus == Focus::Sidebar => self.move_selection(-1),
             Action::PageDown if self.focus == Focus::Sidebar => self.move_selection(page),
@@ -410,7 +565,9 @@ impl App {
             Action::Top => self.scroll = self.max_scroll,
             Action::Bottom => self.scroll = 0,
             Action::Open => {
-                if self.focus == Focus::Sidebar {
+                if self.focus == Focus::Rail {
+                    self.focus = Focus::Sidebar;
+                } else if self.focus == Focus::Sidebar {
                     self.open_selected().await;
                 } else if self.open.is_some() {
                     self.mode = Mode::Compose;
@@ -422,8 +579,20 @@ impl App {
                 } else if !self.query.is_empty() {
                     self.query.clear();
                     self.selected = 0;
+                } else if self.focus == Focus::Sidebar && self.rail_visible {
+                    self.focus = Focus::Rail;
                 }
             }
+            Action::FocusLeft => match self.focus {
+                Focus::Messages => self.focus = Focus::Sidebar,
+                Focus::Sidebar if self.rail_visible => self.focus = Focus::Rail,
+                _ => {}
+            },
+            Action::FocusRight => match self.focus {
+                Focus::Rail => self.focus = Focus::Sidebar,
+                Focus::Sidebar if self.open.is_some() => self.focus = Focus::Messages,
+                _ => {}
+            },
             Action::Compose => {
                 if self.open.is_some() {
                     self.mode = Mode::Compose;
@@ -448,6 +617,9 @@ impl App {
                 self.toast("Refreshing…", false);
             }
             Action::LoadOlder => self.request_older(),
+            Action::Thread => self.toggle_thread(),
+            Action::NextThread => self.step_thread(1),
+            Action::PrevThread => self.step_thread(-1),
             Action::Retry => {
                 let failed = self.messages.iter().rev().find(|m| {
                     m.is_mine && matches!(m.send_state, SendState::Failed | SendState::Uncertain)

@@ -1,45 +1,67 @@
-//! Composition root: reads settings, opens storage and authentication, and
-//! builds the application core. The only crate (besides the adapter itself)
-//! that names `comms-provider-msgraph`, so frontends stay provider-agnostic.
+//! Composition root: reads settings, opens storage and builds the application
+//! core for the chosen backend. The only crate (besides the adapters
+//! themselves) that names a provider crate, so frontends stay
+//! provider-agnostic.
+//!
+//! Each backend is a Cargo feature (`teams`, `signal`, `slack`; all on by
+//! default). A build without one still understands its settings but refuses to
+//! start it with a message saying so.
 
 mod settings;
+#[cfg(feature = "signal")]
+mod signal;
+#[cfg(feature = "slack")]
+mod slack;
+#[cfg(feature = "teams")]
+mod teams;
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use async_trait::async_trait;
 use comms_app::{AppHandle, CoreConfig};
-use comms_auth::{AuthConfig, AuthError, DeviceCodePrompt, KeyringStore, Session};
-use comms_provider_api::ProviderError;
-use comms_provider_msgraph::{AccessTokenSource, MsGraphProvider};
-use comms_provider_signal::{SignalConfig, SignalProvider};
 use comms_storage::Store;
 use comms_testkit::FakeProvider;
+use std::sync::Arc;
 
-pub use settings::{Backend, ChannelAccess, Paths, Settings, SignalSettings};
+pub use settings::{Backend, ChannelAccess, Paths, Settings, SignalSettings, SlackSettings};
+#[cfg(feature = "signal")]
+pub use signal::{signal_link, start_signal, valid_signal_account};
+#[cfg(feature = "slack")]
+pub use slack::start_slack;
+#[cfg(feature = "teams")]
+pub use teams::{
+    explain_auth_error, login, make_session, open_in_browser, start_graph, start_teams, teams_login,
+};
 
-/// Adapts the auth session to what the Graph client needs.
-struct SessionTokens(Arc<Session>);
-
-#[async_trait]
-impl AccessTokenSource for SessionTokens {
-    async fn access_token(&self) -> Result<String, ProviderError> {
-        self.0.access_token().await.map_err(|e| match e {
-            AuthError::Network(message) => ProviderError::Network {
-                may_have_reached_server: false,
-                message,
-            },
-            _ => ProviderError::Unauthorized,
-        })
+/// Which backends this build contains.
+pub fn compiled_backends() -> Vec<Backend> {
+    let mut v = Vec::new();
+    if cfg!(feature = "teams") {
+        v.push(Backend::Teams);
     }
-
-    async fn invalidate(&self) {
-        self.0.invalidate().await;
+    if cfg!(feature = "signal") {
+        v.push(Backend::Signal);
     }
+    if cfg!(feature = "slack") {
+        v.push(Backend::Slack);
+    }
+    v
 }
 
+// Unused when every backend is compiled in.
+#[allow(dead_code)]
+fn not_compiled(name: &str, feature: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "this build of comms does not include {name} support \
+         (it was built without the `{feature}` feature). Install a build that does."
+    )
+}
+
+#[cfg_attr(
+    not(any(feature = "teams", feature = "signal", feature = "slack")),
+    allow(dead_code)
+)]
 fn core_config(settings: &Settings) -> CoreConfig {
     CoreConfig {
         initial_messages: settings.initial_messages,
@@ -50,138 +72,62 @@ fn core_config(settings: &Settings) -> CoreConfig {
     }
 }
 
-/// Build an authentication session from the settings (does not sign in).
-pub fn make_session(settings: &Settings) -> Result<Arc<Session>> {
-    let Some(client_id) = settings.client_id.clone() else {
-        bail!(
-            "no client_id configured.\n\
-             Register an Entra app (see docs/setup-entra.md) and set `client_id` in {} \
-             or the COMMS_CLIENT_ID environment variable. \
-             Use `comms --demo` to try the interface without signing in.",
-            Paths::discover()?.config_file.display()
-        );
-    };
-    let cfg = AuthConfig::new(client_id, settings.tenant.clone(), settings.scopes());
-    let store = KeyringStore::new(&cfg.account_key())?;
-    Ok(Arc::new(Session::new(cfg, Arc::new(store))?))
-}
-
-/// Sign in interactively. Prints instructions through `say`.
-pub async fn login(session: &Session, device_code: bool, say: impl Fn(&str)) -> Result<()> {
-    let res = if device_code {
-        session
-            .login_device_code(|p: &DeviceCodePrompt| {
-                say(&format!(
-                    "To sign in, open {} and enter the code {}",
-                    p.verification_uri, p.user_code
-                ));
-            })
-            .await
-    } else {
-        session
-            .login_browser(|url| {
-                if open_in_browser(url) {
-                    say("Opening your browser to sign in...");
-                } else {
-                    say("Open this address in a browser to sign in:");
-                }
-                say(url);
-                say("Waiting for sign-in to complete (Ctrl+C to cancel)...");
-            })
-            .await
-    };
-    res.map_err(explain_auth_error)
-}
-
-/// Turn an auth failure into an error that includes advice when we have any.
-pub fn explain_auth_error(e: AuthError) -> anyhow::Error {
-    match e.hint() {
-        Some(h) => anyhow::anyhow!("{e}\n\n{h}"),
-        None => e.into(),
+/// Start the backend selected in the settings. `say` receives sign-in prompts
+/// for backends that need one (Teams).
+pub async fn start(settings: &Settings, say: impl Fn(&str)) -> Result<AppHandle> {
+    match settings.provider {
+        Backend::Teams => {
+            #[cfg(feature = "teams")]
+            return start_teams(settings, say).await;
+            #[cfg(not(feature = "teams"))]
+            return {
+                let _ = say;
+                Err(not_compiled("Microsoft Teams", "teams"))
+            };
+        }
+        Backend::Signal => {
+            #[cfg(feature = "signal")]
+            return start_signal(settings).await;
+            #[cfg(not(feature = "signal"))]
+            return Err(not_compiled("Signal", "signal"));
+        }
+        Backend::Slack => {
+            #[cfg(feature = "slack")]
+            return start_slack(settings).await;
+            #[cfg(not(feature = "slack"))]
+            return Err(not_compiled("Slack", "slack"));
+        }
     }
 }
 
-/// Best effort launch of the default browser. Returns whether it was started.
-pub fn open_in_browser(url: &str) -> bool {
-    use std::process::{Command, Stdio};
-    // Only ever hand http(s) URLs to the OS.
-    if !(url.starts_with("https://") || url.starts_with("http://")) {
-        return false;
+/// `comms login` (Teams only).
+pub async fn login_command(
+    settings: &Settings,
+    device_code: bool,
+    say: impl Fn(&str),
+) -> Result<()> {
+    match settings.provider {
+        Backend::Teams => {
+            #[cfg(feature = "teams")]
+            return teams_login(settings, device_code, say).await;
+            #[cfg(not(feature = "teams"))]
+            return {
+                let _ = (device_code, say);
+                Err(not_compiled("Microsoft Teams", "teams"))
+            };
+        }
+        Backend::Signal => bail!("Signal does not use `login`; run `comms signal-link` instead."),
+        Backend::Slack => bail!(
+            "Slack does not use `login`; put your user token in COMMS_SLACK_TOKEN \
+             or the [slack] section (see docs/slack.md)."
+        ),
     }
-    #[cfg(target_os = "linux")]
-    let cmd = Command::new("xdg-open")
-        .arg(url)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
-    #[cfg(target_os = "macos")]
-    let cmd = Command::new("open")
-        .arg(url)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
-    #[cfg(target_os = "windows")]
-    let cmd = Command::new("rundll32")
-        .args(["url.dll,FileProtocolHandler", url])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    let cmd: std::io::Result<std::process::Child> = Err(std::io::Error::other("unsupported"));
-    cmd.is_ok()
 }
 
-/// The real backend. Requires a stored sign-in (see [`login`]).
-pub async fn start_graph(settings: &Settings, session: Arc<Session>) -> Result<AppHandle> {
-    if !session.is_signed_in().await.map_err(explain_auth_error)? {
-        bail!("not signed in. Run `comms login` first.");
-    }
-    let paths = Paths::discover()?;
-    let store = Store::open(&paths.database)
-        .await
-        .context("opening the local database")?;
-    let provider = MsGraphProvider::new(Arc::new(SessionTokens(session)))?
-        .with_channels(settings.channels != ChannelAccess::Off);
-    Ok(AppHandle::start(Arc::new(provider), store, core_config(settings)).await?)
-}
-
-/// A valid-looking international phone number (`+` and 7 to 15 digits).
-pub fn valid_signal_account(s: &str) -> bool {
-    let digits = s.strip_prefix('+').unwrap_or("");
-    (7..=15).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit())
-}
-
-/// The Signal backend. Needs `signal-cli` with the account already linked
-/// (see [`signal_link`]).
-pub async fn start_signal(settings: &Settings) -> Result<AppHandle> {
-    let Some(account) = settings.signal.account.clone() else {
-        bail!(
-            "no Signal account configured.\n\
-             Set `account = \"+36...\"` in the [signal] section of {} \
-             (or COMMS_SIGNAL_ACCOUNT), and link it first with `comms signal-link`.",
-            Paths::discover()?.config_file.display()
-        );
-    };
-    if !valid_signal_account(&account) {
-        bail!("signal.account must look like +36201234567 (international format), got `{account}`");
-    }
-    let paths = Paths::discover()?;
-    let store = Store::open(&paths.database)
-        .await
-        .context("opening the local database")?;
-    let provider = SignalProvider::connect(SignalConfig {
-        account,
-        cli_path: settings.signal.cli_path.clone(),
-        inbox_file: Some(paths.signal_inbox),
-    })
-    .await?;
-    Ok(AppHandle::start(Arc::new(provider), store, core_config(settings)).await?)
-}
-
-/// Link this computer to your Signal account as a secondary device.
-pub async fn signal_link(settings: &Settings, say: impl Fn(&str)) -> Result<()> {
-    comms_provider_signal::link(&settings.signal.cli_path, "comms", say).await?;
-    Ok(())
+/// `comms signal-link`.
+#[cfg(not(feature = "signal"))]
+pub async fn signal_link(_settings: &Settings, _say: impl Fn(&str)) -> Result<()> {
+    Err(not_compiled("Signal", "signal"))
 }
 
 /// A self-contained demo: fake data, in-memory storage, no network or credentials.
@@ -197,13 +143,28 @@ pub async fn start_demo() -> Result<AppHandle> {
     Ok(AppHandle::start(Arc::new(provider), store, cfg).await?)
 }
 
+/// Like [`start_demo`] but Slack-flavoured: the workspace layout with threads.
+pub async fn start_demo_slack() -> Result<AppHandle> {
+    let store = Store::open_in_memory().await?;
+    let provider = FakeProvider::demo_slack().with_latency(Duration::from_millis(250));
+    let cfg = CoreConfig {
+        chat_poll: Duration::from_secs(3600),
+        channel_poll: Duration::from_secs(3600),
+        open_poll: Duration::from_secs(3600),
+        ..CoreConfig::default()
+    };
+    Ok(AppHandle::start(Arc::new(provider), store, cfg).await?)
+}
+
 /// Sign out and optionally delete the local message cache.
+#[cfg_attr(not(feature = "teams"), allow(unused_variables))]
 pub async fn logout(settings: &Settings, wipe_cache: bool) -> Result<Vec<String>> {
     let mut done = Vec::new();
-    if settings.provider == Backend::Teams && settings.client_id.is_some() {
-        let session = make_session(settings)?;
-        session.logout().await.map_err(explain_auth_error)?;
-        done.push("Removed the stored sign-in from the system keyring.".to_owned());
+    #[cfg(feature = "teams")]
+    if settings.provider == Backend::Teams
+        && let Some(line) = teams::teams_logout(settings).await?
+    {
+        done.push(line);
     }
     if wipe_cache {
         let paths = Paths::discover()?;
@@ -253,50 +214,34 @@ mod tests {
     }
 
     #[test]
-    fn signal_account_validation() {
-        for ok in ["+36201234567", "+1234567"] {
-            assert!(valid_signal_account(ok), "{ok}");
-        }
-        for bad in [
-            "",
-            "36201234567",
-            "+",
-            "+12",
-            "+36 20 123",
-            "+36a01234567",
-            "+1234567890123456",
-        ] {
-            assert!(!valid_signal_account(bad), "{bad}");
-        }
+    fn the_compiled_backends_follow_the_features() {
+        let b = compiled_backends();
+        assert_eq!(b.contains(&Backend::Teams), cfg!(feature = "teams"));
+        assert_eq!(b.contains(&Backend::Signal), cfg!(feature = "signal"));
+        assert_eq!(b.contains(&Backend::Slack), cfg!(feature = "slack"));
+    }
+
+    #[cfg(not(feature = "slack"))]
+    #[tokio::test]
+    async fn a_build_without_slack_says_so() {
+        let s = Settings {
+            provider: Backend::Slack,
+            ..Settings::default()
+        };
+        let err = start(&s, |_| {}).await.map(|_| ()).unwrap_err().to_string();
+        assert!(err.contains("`slack` feature"), "{err}");
     }
 
     #[tokio::test]
-    async fn starting_signal_without_an_account_explains_what_to_do() {
-        let err = start_signal(&Settings::default())
+    async fn login_is_explained_for_backends_without_one() {
+        let s = Settings {
+            provider: Backend::Slack,
+            ..Settings::default()
+        };
+        let err = login_command(&s, false, |_| {})
             .await
-            .map(|_| ())
             .unwrap_err()
             .to_string();
-        assert!(
-            err.contains("signal-link") && err.contains("account"),
-            "{err}"
-        );
-    }
-
-    #[tokio::test]
-    async fn starting_signal_with_a_malformed_account_is_rejected() {
-        let mut s = Settings::default();
-        s.signal.account = Some("0620 123".into());
-        let err = start_signal(&s).await.map(|_| ()).unwrap_err().to_string();
-        assert!(err.contains("+36201234567"), "{err}");
-    }
-
-    #[test]
-    fn missing_client_id_gives_actionable_guidance() {
-        let err = make_session(&Settings::default())
-            .map(|_| ())
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("client_id") && err.contains("--demo"), "{err}");
+        assert!(err.contains("COMMS_SLACK_TOKEN"), "{err}");
     }
 }

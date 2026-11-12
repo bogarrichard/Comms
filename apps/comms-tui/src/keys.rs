@@ -22,10 +22,15 @@ pub enum Action {
     Refresh,
     LoadOlder,
     Retry,
+    Thread,
+    NextThread,
+    PrevThread,
+    FocusLeft,
+    FocusRight,
 }
 
 impl Action {
-    pub const ALL: [Action; 16] = [
+    pub const ALL: [Action; 21] = [
         Action::Quit,
         Action::Down,
         Action::Up,
@@ -42,6 +47,11 @@ impl Action {
         Action::Refresh,
         Action::LoadOlder,
         Action::Retry,
+        Action::Thread,
+        Action::NextThread,
+        Action::PrevThread,
+        Action::FocusLeft,
+        Action::FocusRight,
     ];
 
     /// Name used in `config.toml` under `[keys]`.
@@ -63,6 +73,11 @@ impl Action {
             Action::Refresh => "refresh",
             Action::LoadOlder => "load_older",
             Action::Retry => "retry",
+            Action::Thread => "thread",
+            Action::NextThread => "next_thread",
+            Action::PrevThread => "prev_thread",
+            Action::FocusLeft => "focus_left",
+            Action::FocusRight => "focus_right",
         }
     }
 
@@ -84,6 +99,11 @@ impl Action {
             Action::Refresh => "refresh now",
             Action::LoadOlder => "load older messages",
             Action::Retry => "resend last failed message",
+            Action::Thread => "open / close the thread pane",
+            Action::NextThread => "next thread",
+            Action::PrevThread => "previous thread",
+            Action::FocusLeft => "move to the panel on the left",
+            Action::FocusRight => "move to the panel on the right",
         }
     }
 
@@ -105,6 +125,11 @@ impl Action {
             Action::Refresh => &["r", "ctrl+r"],
             Action::LoadOlder => &["o"],
             Action::Retry => &["R"],
+            Action::Thread => &["t"],
+            Action::NextThread => &["]"],
+            Action::PrevThread => &["["],
+            Action::FocusLeft => &["ctrl+h"],
+            Action::FocusRight => &["ctrl+l"],
         }
     }
 

@@ -13,9 +13,16 @@ workspace = true
 name = "comms"
 path = "src/main.rs"
 
+[features]
+default = ["teams", "signal", "slack"]
+# Which backends the binary contains (see comms-bootstrap).
+teams = ["comms-bootstrap/teams"]
+signal = ["comms-bootstrap/signal"]
+slack = ["comms-bootstrap/slack"]
+
 [dependencies]
 comms-app.workspace = true
-comms-bootstrap.workspace = true
+comms-bootstrap = { workspace = true, default-features = false }
 comms-domain.workspace = true
 anyhow.workspace = true
 chrono.workspace = true

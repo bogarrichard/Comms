@@ -2,7 +2,7 @@
 
 use chrono::{Local, NaiveDate};
 use comms_app::ConnectionStatus;
-use comms_domain::{Conversation, ConversationKind, Message, SendState};
+use comms_domain::{Conversation, ConversationKind, Message, RemoteId, SendState};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -13,24 +13,45 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::{App, Focus, Mode};
 use crate::keys::Action;
 use crate::render::content_lines;
+use crate::theme::Theme;
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// Odd inner width (this minus the border) so the tile and the name centre on the same column.
+const RAIL_WIDTH: u16 = 16;
+/// Narrower than this and the workspace rail is dropped.
+const RAIL_MIN_TOTAL: u16 = 80;
+const THREAD_WIDTH: u16 = 38;
+/// The thread pane sits beside the chat only when the chat keeps this much.
+const THREAD_BESIDE_MIN: u16 = 40 + THREAD_WIDTH;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
     let [main, status] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);
-    if area.width < 70 {
+    app.rail_visible = app.theme.workspace_ui && area.width >= RAIL_MIN_TOTAL;
+    if !app.rail_visible && app.focus == Focus::Rail {
+        app.focus = Focus::Sidebar;
+    }
+    let main = if app.rail_visible {
+        let [rail, rest] =
+            Layout::horizontal([Constraint::Length(RAIL_WIDTH), Constraint::Min(10)]).areas(main);
+        draw_rail(f, app, rail);
+        rest
+    } else {
+        main
+    };
+    if main.width < 70 {
         // Small terminals: one panel at a time.
         match (app.focus, app.open.is_some()) {
-            (Focus::Messages, true) => draw_chat(f, app, main),
+            (Focus::Messages, true) => draw_content(f, app, main),
             _ => draw_sidebar(f, app, main),
         }
     } else {
-        let side = (area.width * 3 / 10).clamp(24, 42);
+        let side = (main.width * 3 / 10).clamp(24, 42);
         let [left, right] =
             Layout::horizontal([Constraint::Length(side), Constraint::Min(10)]).areas(main);
         draw_sidebar(f, app, left);
-        draw_chat(f, app, right);
+        draw_content(f, app, right);
     }
     draw_status(f, app, status);
     if app.mode == Mode::Help {
@@ -38,11 +59,157 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 }
 
+/// The chat, plus the thread pane when one is open: beside the chat if there
+/// is room, otherwise in its place.
+fn draw_content(f: &mut Frame, app: &mut App, area: Rect) {
+    if app.thread.is_none() {
+        return draw_chat(f, app, area);
+    }
+    if area.width >= THREAD_BESIDE_MIN {
+        let [chat, thread] =
+            Layout::horizontal([Constraint::Min(10), Constraint::Length(THREAD_WIDTH)]).areas(area);
+        draw_chat(f, app, chat);
+        draw_thread(f, app, thread);
+    } else {
+        draw_thread(f, app, area);
+    }
+}
+
+fn draw_rail(f: &mut Frame, app: &App, area: Rect) {
+    let focused = app.focus == Focus::Rail;
+    let block = Block::default()
+        .borders(Borders::RIGHT)
+        .border_style(border(app, focused));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    if inner.width < 9 || inner.height < 8 {
+        return;
+    }
+    let t = &app.theme;
+
+    // The workspace "image": a tile with the workspace's initial.
+    let name = app.workspace_name();
+    let initial = name
+        .chars()
+        .find(|c| c.is_alphanumeric())
+        .map_or('S', |c| c.to_ascii_uppercase());
+    let tile_w = 7usize;
+    let pad = (inner.width as usize).saturating_sub(tile_w) / 2;
+    let tile = Style::new().bg(t.accent).fg(Color::Black);
+    let blank = " ".repeat(tile_w);
+    let mut lines: Vec<Line> = vec![
+        Line::from(vec![
+            Span::raw(" ".repeat(pad)),
+            Span::styled(blank.clone(), tile),
+        ]),
+        Line::from(vec![
+            Span::raw(" ".repeat(pad)),
+            Span::styled(
+                format!("   {initial}   "),
+                tile.add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![Span::raw(" ".repeat(pad)), Span::styled(blank, tile)]),
+        Line::from(Span::styled(
+            truncate(&name, inner.width as usize),
+            Style::new().fg(t.muted),
+        ))
+        .alignment(Alignment::Center),
+        Line::raw(""),
+    ];
+
+    let active = app.rail_item();
+    for item in crate::app::RailItem::ALL {
+        let mut label = format!(" {} {}", item.icon(), item.label());
+        if item == crate::app::RailItem::Activity && app.unread_count() > 0 {
+            label.push_str(&format!(" {}", app.unread_count()));
+        }
+        let label = truncate(&label, inner.width as usize);
+        let fill = (inner.width as usize).saturating_sub(label.width());
+        let text = format!("{label}{}", " ".repeat(fill));
+        let style = if item == active {
+            // Green under the cursor, blue when it is only where we are.
+            let bg = if focused { t.accent } else { t.secondary };
+            Style::new()
+                .bg(bg)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::new().fg(t.muted)
+        };
+        lines.push(Line::from(Span::styled(text, style)));
+    }
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+fn draw_thread(f: &mut Frame, app: &App, area: Rect) {
+    let t = &app.theme;
+    let replies = app.thread_replies();
+    let title = Line::from(vec![
+        Span::styled(
+            " Thread ",
+            Style::new().fg(t.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(
+                "· {} {} · {} close ",
+                replies.len(),
+                if replies.len() == 1 {
+                    "reply"
+                } else {
+                    "replies"
+                },
+                app.keymap.labels(Action::Thread)
+            ),
+            Style::new().fg(t.muted),
+        ),
+    ]);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::new().fg(t.secondary))
+        .title(title);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let w = inner.width as usize;
+    let h = inner.height as usize;
+
+    let mut root_lines = match app.thread_root() {
+        Some(m) => message_lines(std::slice::from_ref(m), w, t, false),
+        None => vec![Line::from(Span::styled(
+            "(original message not loaded)",
+            Style::new().fg(t.muted).add_modifier(Modifier::ITALIC),
+        ))],
+    };
+    root_lines.truncate((h / 3).max(2));
+    // Inside the pane every message is a reply; the tag would only repeat.
+    let owned: Vec<Message> = replies
+        .iter()
+        .map(|m| Message {
+            reply_to: None,
+            ..(*m).clone()
+        })
+        .collect();
+    let reply_lines = message_lines(&owned, w, t, false);
+
+    let mut lines = root_lines;
+    lines.push(Line::from(Span::styled(
+        "─".repeat(w),
+        Style::new().fg(t.muted),
+    )));
+    let room = h.saturating_sub(lines.len());
+    let start = reply_lines.len().saturating_sub(room);
+    lines.extend(reply_lines[start..].iter().cloned());
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
 fn border(app: &App, focused: bool) -> Style {
     Style::new().fg(if focused {
         app.theme.accent
     } else {
-        Color::DarkGray
+        app.theme.muted
     })
 }
 
@@ -151,7 +318,19 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
             list_area,
         );
     } else {
-        let hl = Style::new().add_modifier(Modifier::REVERSED);
+        let hl = if app.theme.workspace_ui {
+            let bg = if focused {
+                app.theme.accent
+            } else {
+                app.theme.secondary
+            };
+            Style::new()
+                .bg(bg)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::new().add_modifier(Modifier::REVERSED)
+        };
         f.render_stateful_widget(List::new(items).highlight_style(hl), list_area, &mut state);
     }
     if searching {
@@ -168,26 +347,33 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-fn name_color(name: &str) -> Color {
-    const PALETTE: [Color; 6] = [
-        Color::Green,
-        Color::Magenta,
-        Color::Yellow,
-        Color::Blue,
-        Color::LightRed,
-        Color::LightCyan,
-    ];
+fn name_color(name: &str, palette: &[Color]) -> Color {
     let h = name
         .bytes()
         .fold(0usize, |a, b| a.wrapping_mul(31).wrapping_add(b as usize));
-    PALETTE[h % PALETTE.len()]
+    palette[h % palette.len()]
 }
 
-fn message_lines(msgs: &[Message], width: usize, accent: Color) -> Vec<Line<'static>> {
+/// `threaded`: hide replies whose root is in `msgs` and show "N replies"
+/// under the root instead (the thread pane shows them).
+fn message_lines(
+    msgs: &[Message],
+    width: usize,
+    theme: &Theme,
+    threaded: bool,
+) -> Vec<Line<'static>> {
+    let accent = theme.accent;
+    let muted = theme.muted;
+    let all = msgs;
+    let in_list = |id: &RemoteId| msgs.iter().any(|m| m.remote_id.as_ref() == Some(id));
+    let msgs: Vec<&Message> = msgs
+        .iter()
+        .filter(|m| !(threaded && m.reply_to.as_ref().is_some_and(in_list)))
+        .collect();
     let mut out: Vec<Line<'static>> = Vec::new();
     let mut last_day: Option<NaiveDate> = None;
     let body_w = width.saturating_sub(2).max(1);
-    for m in msgs {
+    for m in msgs.iter().copied() {
         let local = m.timestamp.with_timezone(&Local);
         if last_day != Some(local.date_naive()) {
             last_day = Some(local.date_naive());
@@ -197,7 +383,7 @@ fn message_lines(msgs: &[Message], width: usize, accent: Color) -> Vec<Line<'sta
             out.push(
                 Line::from(Span::styled(
                     format!("── {} ──", local.format("%a %e %b %Y")),
-                    Style::new().fg(Color::DarkGray),
+                    Style::new().fg(muted),
                 ))
                 .alignment(Alignment::Center),
             );
@@ -206,7 +392,7 @@ fn message_lines(msgs: &[Message], width: usize, accent: Color) -> Vec<Line<'sta
             Style::new().fg(accent).add_modifier(Modifier::BOLD)
         } else {
             Style::new()
-                .fg(name_color(&m.sender.display_name))
+                .fg(name_color(&m.sender.display_name, theme.names))
                 .add_modifier(Modifier::BOLD)
         };
         let mut head = vec![
@@ -220,14 +406,14 @@ fn message_lines(msgs: &[Message], width: usize, accent: Color) -> Vec<Line<'sta
             ),
             Span::styled(
                 format!("  {}", local.format("%H:%M")),
-                Style::new().fg(Color::DarkGray),
+                Style::new().fg(muted),
             ),
         ];
         if m.reply_to.is_some() {
-            head.push(Span::styled("  ↳ reply", Style::new().fg(Color::DarkGray)));
+            head.push(Span::styled("  ↳ reply", Style::new().fg(muted)));
         }
         if m.edited_at.is_some() {
-            head.push(Span::styled("  (edited)", Style::new().fg(Color::DarkGray)));
+            head.push(Span::styled("  (edited)", Style::new().fg(muted)));
         }
         match m.send_state {
             SendState::Sent => {}
@@ -250,9 +436,7 @@ fn message_lines(msgs: &[Message], width: usize, accent: Color) -> Vec<Line<'sta
         let mut body: Vec<Line<'static>> = if m.deleted_at.is_some() {
             vec![Line::from(Span::styled(
                 "(message deleted)",
-                Style::new()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::ITALIC),
+                Style::new().fg(muted).add_modifier(Modifier::ITALIC),
             ))]
         } else {
             content_lines(&m.content, body_w)
@@ -266,6 +450,38 @@ fn message_lines(msgs: &[Message], width: usize, accent: Color) -> Vec<Line<'sta
         for mut l in body {
             l.spans.insert(0, Span::raw("  "));
             out.push(l);
+        }
+        if threaded && let Some(id) = &m.remote_id {
+            let replies: Vec<&Message> = all
+                .iter()
+                .filter(|r| r.reply_to.as_ref() == Some(id) && r.deleted_at.is_none())
+                .collect();
+            if let Some(last) = replies.last() {
+                out.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        format!(
+                            "↳ {} {}",
+                            replies.len(),
+                            if replies.len() == 1 {
+                                "reply"
+                            } else {
+                                "replies"
+                            }
+                        ),
+                        Style::new()
+                            .fg(theme.secondary)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!(
+                            "  last {}",
+                            last.timestamp.with_timezone(&Local).format("%H:%M")
+                        ),
+                        Style::new().fg(muted),
+                    ),
+                ]));
+            }
         }
         out.push(Line::raw(""));
     }
@@ -352,7 +568,12 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
                 inner,
             );
         } else {
-            let lines = message_lines(&app.messages, inner.width as usize, app.theme.accent);
+            let lines = message_lines(
+                &app.messages,
+                inner.width as usize,
+                &app.theme,
+                app.theme.workspace_ui,
+            );
             let h = inner.height as usize;
             app.max_scroll = lines.len().saturating_sub(h);
             app.scroll = app.scroll.min(app.max_scroll);
@@ -473,10 +694,11 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         )),
         None => left.push(Span::styled(
             format!(
-                "{} help · {} search · {} filter · {} quit",
+                "{} help · {} search · {} filter · {} thread · {} quit",
                 app.keymap.labels(Action::Help),
                 app.keymap.labels(Action::Search),
                 app.keymap.labels(Action::NextFilter),
+                app.keymap.labels(Action::Thread),
                 app.keymap.labels(Action::Quit),
             ),
             Style::new().fg(Color::DarkGray),

@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+#[cfg(feature = "teams")]
 use comms_provider_msgraph::scopes;
 use serde::Deserialize;
 
@@ -13,6 +14,7 @@ pub enum Backend {
     #[default]
     Teams,
     Signal,
+    Slack,
 }
 
 /// The `[signal]` table.
@@ -31,6 +33,23 @@ impl Default for SignalSettings {
             account: None,
             cli_path: "signal-cli".to_owned(),
         }
+    }
+}
+
+/// The `[slack]` table.
+#[derive(Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SlackSettings {
+    /// A Slack *user* token (`xoxp-...`). Prefer `COMMS_SLACK_TOKEN` so the
+    /// secret stays out of the config file.
+    pub token: Option<String>,
+}
+
+impl std::fmt::Debug for SlackSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SlackSettings")
+            .field("token", &self.token.as_ref().map(|_| "<redacted>"))
+            .finish()
     }
 }
 
@@ -66,9 +85,10 @@ impl Default for PollSettings {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
-    /// `teams` (default) or `signal`.
+    /// `teams` (default), `signal` or `slack`.
     pub provider: Backend,
     pub signal: SignalSettings,
+    pub slack: SlackSettings,
     /// Application (client) ID of your Entra app registration.
     pub client_id: Option<String>,
     /// `organizations`, `common` or a tenant ID/domain.
@@ -86,6 +106,7 @@ impl Default for Settings {
         Self {
             provider: Backend::default(),
             signal: SignalSettings::default(),
+            slack: SlackSettings::default(),
             client_id: None,
             tenant: "organizations".to_owned(),
             channels: ChannelAccess::Read,
@@ -154,7 +175,11 @@ impl Settings {
         {
             Some("teams") => self.provider = Backend::Teams,
             Some("signal") => self.provider = Backend::Signal,
+            Some("slack") => self.provider = Backend::Slack,
             _ => {}
+        }
+        if let Some(v) = get("COMMS_SLACK_TOKEN").filter(|v| !v.trim().is_empty()) {
+            self.slack.token = Some(v.trim().to_owned());
         }
         if let Some(v) = get("COMMS_SIGNAL_ACCOUNT").filter(|v| !v.trim().is_empty()) {
             self.signal.account = Some(v.trim().to_owned());
@@ -176,6 +201,7 @@ impl Settings {
     }
 
     /// Delegated permissions to request, least privilege for the chosen features.
+    #[cfg(feature = "teams")]
     pub fn scopes(&self) -> Vec<String> {
         let mut v: Vec<&str> = scopes::BASE.to_vec();
         if matches!(self.channels, ChannelAccess::Basic | ChannelAccess::Read) {
@@ -289,6 +315,7 @@ mod tests {
         assert_eq!(s.tenant, "organizations", "blank values are ignored");
     }
 
+    #[cfg(feature = "teams")]
     #[test]
     fn scopes_follow_the_channel_setting_and_never_exceed_it() {
         let mut s = Settings::default();
@@ -320,5 +347,27 @@ mod tests {
             );
             assert!(!s.scopes().iter().any(|x| x.ends_with(".ReadWrite.All")));
         }
+    }
+
+    #[test]
+    fn slack_provider_and_token_parse_and_the_token_is_never_debug_printed() {
+        let s =
+            Settings::parse("provider = \"slack\"\n[slack]\ntoken = \"xoxp-secret-1234\"").unwrap();
+        assert_eq!(s.provider, Backend::Slack);
+        assert_eq!(s.slack.token.as_deref(), Some("xoxp-secret-1234"));
+        assert!(!format!("{s:?}").contains("xoxp-secret"));
+        assert!(Settings::parse("[slack]\ntokn = \"x\"").is_err());
+    }
+
+    #[test]
+    fn environment_can_select_slack_and_set_its_token() {
+        let mut s = Settings::default();
+        s.apply_env(|k| match k {
+            "COMMS_PROVIDER" => Some("slack".into()),
+            "COMMS_SLACK_TOKEN" => Some(" xoxp-abc-1234567 ".into()),
+            _ => None,
+        });
+        assert_eq!(s.provider, Backend::Slack);
+        assert_eq!(s.slack.token.as_deref(), Some("xoxp-abc-1234567"));
     }
 }

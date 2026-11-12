@@ -278,6 +278,134 @@ impl FakeProvider {
         p
     }
 
+    /// A Slack-flavoured data set for `--demo-slack`: DMs, a group DM and
+    /// channels, with a few threads (replies carry the root's id in `reply_to`).
+    pub fn demo_slack() -> Self {
+        let p = Self::empty().with_kind("slack");
+        let now = Utc::now();
+        let ago = |mins: i64| now - ChronoDuration::minutes(mins);
+        let me = p.me();
+        let anna = person("U-anna", "Anna Kovács");
+        let bela = person("U-bela", "Béla Szabó");
+        let prof = person("U-prof", "Dr. Nagy Péter");
+        let reply = |mut m: RemoteMessage, root: &str| {
+            m.reply_to = Some(RemoteId::new(root));
+            m
+        };
+
+        let mut c = conversation("D-anna", ConversationKind::Direct, "Anna Kovács", None);
+        c.last_read = Some(ago(300));
+        p.add_conversation(
+            c,
+            vec![
+                text_message("1.1", &anna, ago(190), "Did you push the sensor driver?"),
+                text_message("1.2", &me, ago(185), "Yes, see the `drivers` branch."),
+                text_message(
+                    "1.3",
+                    &anna,
+                    ago(6),
+                    "Great, can we pair on the calibration later?",
+                ),
+            ],
+        );
+        let mut c = conversation("D-prof", ConversationKind::Direct, "Dr. Nagy Péter", None);
+        c.last_read = Some(ago(10));
+        p.add_conversation(
+            c,
+            vec![text_message(
+                "2.1",
+                &prof,
+                ago(1500),
+                "Thesis outline looks good. Let's talk on Thursday.",
+            )],
+        );
+        let mut c = conversation("G-lab", ConversationKind::Group, "Anna, Béla", None);
+        c.last_read = Some(ago(30));
+        p.add_conversation(
+            c,
+            vec![
+                text_message("3.1", &bela, ago(900), "Who has the oscilloscope key?"),
+                text_message("3.2", &anna, ago(880), "Me, I'll leave it at the desk."),
+            ],
+        );
+
+        let mut c = conversation("C-general", ConversationKind::Channel, "general", None);
+        c.last_read = Some(ago(20));
+        p.add_conversation(
+            c,
+            vec![
+                text_message("4.1", &prof, ago(1200), "Welcome to the lab workspace!"),
+                text_message("4.2", &anna, ago(400), "Anyone up for lunch at 12:30?"),
+                reply(
+                    text_message("4.3", &bela, ago(395), "Yes, count me in!"),
+                    "4.2",
+                ),
+                reply(
+                    text_message("4.4", &me, ago(390), "Same here, I'll bring the poster."),
+                    "4.2",
+                ),
+                text_message(
+                    "4.5",
+                    &prof,
+                    ago(120),
+                    "Reminder: lab safety briefing on Friday.",
+                ),
+            ],
+        );
+        let mut c = conversation("C-notes", ConversationKind::Channel, "lab-notes", None);
+        c.last_read = Some(ago(2));
+        p.add_conversation(
+            c,
+            vec![
+                text_message(
+                    "5.1",
+                    &prof,
+                    ago(300),
+                    "Please upload your measurement CSVs before Friday.",
+                ),
+                reply(
+                    text_message("5.2", &anna, ago(280), "Which folder should they go in?"),
+                    "5.1",
+                ),
+                reply(
+                    text_message(
+                        "5.3",
+                        &prof,
+                        ago(270),
+                        "The shared drive, under `/lab/run7`.",
+                    ),
+                    "5.1",
+                ),
+                reply(
+                    text_message("5.4", &me, ago(260), "Done, run 7 is uploaded."),
+                    "5.1",
+                ),
+                reply(
+                    text_message("5.5", &bela, ago(250), "Mine are still uploading."),
+                    "5.1",
+                ),
+                text_message(
+                    "5.6",
+                    &bela,
+                    ago(90),
+                    "Calibration finished, results are in the shared notebook.",
+                ),
+            ],
+        );
+        let mut c = conversation("C-random", ConversationKind::Channel, "random", None);
+        c.last_read = Some(ago(1));
+        p.add_conversation(
+            c,
+            vec![text_message(
+                "6.1",
+                &anna,
+                ago(2500),
+                "Coffee machine is fixed.",
+            )],
+        );
+        p
+    }
+
     async fn pause(&self) {
         if !self.latency.is_zero() {
             tokio::time::sleep(self.latency).await;

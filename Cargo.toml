@@ -15,6 +15,7 @@ comms-domain = { path = "crates/comms-domain" }
 comms-provider-api = { path = "crates/comms-provider-api" }
 comms-provider-msgraph = { path = "crates/comms-provider-msgraph" }
 comms-provider-signal = { path = "crates/comms-provider-signal" }
+comms-provider-slack = { path = "crates/comms-provider-slack" }
 comms-auth = { path = "crates/comms-auth" }
 comms-storage = { path = "crates/comms-storage" }
 comms-app = { path = "crates/comms-app" }

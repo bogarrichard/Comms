@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use comms_app::AppHandle;
-use comms_bootstrap::{Backend, Paths, Settings};
+use comms_bootstrap::{Paths, Settings};
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste, Event, EventStream};
 use futures::StreamExt;
 use tokio::sync::broadcast::error::RecvError;
@@ -24,11 +24,12 @@ use crate::app::App;
 use crate::keys::KeyMap;
 
 const HELP: &str = "\
-comms — a fast terminal client for Microsoft Teams and Signal
+comms — a fast terminal client for Microsoft Teams, Signal and Slack
 
 USAGE:
     comms                     start the client
     comms --demo              try the interface with fake data (no account needed)
+    comms --demo-slack        the same, with the Slack workspace layout and threads
     comms login               sign in with your browser
     comms login --device-code sign in with a code (for SSH / no browser)
     comms signal-link         link this computer to your Signal account (needs signal-cli)
@@ -37,7 +38,8 @@ USAGE:
     comms paths               show where config, cache and logs live
     comms --version | --help
 
-Teams: see docs/setup-entra.md.  Signal: see docs/signal.md (set provider = signal).
+Teams: see docs/setup-entra.md.  Signal: see docs/signal.md (provider = signal).
+Slack: see docs/slack.md (provider = slack, token in COMMS_SLACK_TOKEN).
 Press ? inside the client for key bindings.";
 
 #[tokio::main]
@@ -72,11 +74,8 @@ async fn run() -> Result<()> {
         }
         Some("login") => {
             let settings = Settings::load()?;
-            if settings.provider == Backend::Signal {
-                bail!("Signal does not use `login`; run `comms signal-link` instead.");
-            }
-            let session = comms_bootstrap::make_session(&settings)?;
-            comms_bootstrap::login(&session, has("--device-code"), |s| println!("{s}")).await?;
+            comms_bootstrap::login_command(&settings, has("--device-code"), |s| println!("{s}"))
+                .await?;
             println!("Signed in. Start the client with `comms`.");
             return Ok(());
         }
@@ -97,7 +96,7 @@ async fn run() -> Result<()> {
             }
             return Ok(());
         }
-        Some("--demo") | None => {}
+        Some("--demo" | "--demo-slack") | None => {}
         Some(other) => bail!("unknown argument `{other}`\n\n{HELP}"),
     }
 
@@ -106,21 +105,12 @@ async fn run() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("invalid key configuration: {e}"))?;
     init_logging()?;
 
-    let handle: AppHandle = if has("--demo") {
+    let handle: AppHandle = if has("--demo-slack") {
+        comms_bootstrap::start_demo_slack().await?
+    } else if has("--demo") {
         comms_bootstrap::start_demo().await?
-    } else if settings.provider == Backend::Signal {
-        comms_bootstrap::start_signal(&settings).await?
     } else {
-        let session = comms_bootstrap::make_session(&settings)?;
-        if !session
-            .is_signed_in()
-            .await
-            .map_err(comms_bootstrap::explain_auth_error)?
-        {
-            println!("You are not signed in yet.");
-            comms_bootstrap::login(&session, false, |s| println!("{s}")).await?;
-        }
-        comms_bootstrap::start_graph(&settings, session).await?
+        comms_bootstrap::start(&settings, |s| println!("{s}")).await?
     };
 
     let app = App::new(handle, keymap).await;

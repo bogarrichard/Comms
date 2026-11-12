@@ -9,13 +9,21 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["teams", "signal", "slack"]
+# One feature per backend; a build without one refuses to start it.
+teams = ["dep:comms-auth", "dep:comms-provider-msgraph"]
+signal = ["dep:comms-provider-signal"]
+slack = ["dep:comms-provider-slack"]
+
 [dependencies]
 comms-app.workspace = true
-comms-auth.workspace = true
+comms-auth = { workspace = true, optional = true }
 comms-domain.workspace = true
 comms-provider-api.workspace = true
-comms-provider-msgraph.workspace = true
-comms-provider-signal.workspace = true
+comms-provider-msgraph = { workspace = true, optional = true }
+comms-provider-signal = { workspace = true, optional = true }
+comms-provider-slack = { workspace = true, optional = true }
 comms-storage.workspace = true
 comms-testkit.workspace = true
 anyhow.workspace = true

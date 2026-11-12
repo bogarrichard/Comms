@@ -529,6 +529,7 @@ dependencies = [
  "comms-provider-api",
  "comms-provider-msgraph",
  "comms-provider-signal",
+ "comms-provider-slack",
  "comms-storage",
  "comms-testkit",
  "directories",
@@ -592,6 +593,23 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "comms-provider-slack"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "comms-domain",
+ "comms-provider-api",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "url",
+ "wiremock",
 ]
 
 [[package]]
