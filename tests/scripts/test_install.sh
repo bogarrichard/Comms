@@ -197,6 +197,21 @@ run_install FAKE_LATEST=v1.0.0
 if "$SB/home/.local/bin/comms" --version | grep -q "comms v1.0.0"; then ok "replaces an existing install"; else bad "replaces an existing install"; fi
 expect_no_file "leaves no temporary copy behind" "$SB/home/.local/bin/.comms.new"
 
+new_sandbox; make_release v0.3.0 $TARGET
+mkdir -p "$SB/home/.local/bin"; printf '#!/bin/sh\necho "comms 0.2.0"\n' >"$SB/home/.local/bin/comms"; chmod 755 "$SB/home/.local/bin/comms"
+run_install FAKE_LATEST=v0.3.0
+expect_out "says it updated from the old version" "updated comms 0.2.0 -> 0.3.0"
+
+new_sandbox; make_release v0.3.0 $TARGET
+mkdir -p "$SB/home/.local/bin"; printf '#!/bin/sh\necho "comms 0.3.0"\n' >"$SB/home/.local/bin/comms"; chmod 755 "$SB/home/.local/bin/comms"
+run_install FAKE_LATEST=v0.3.0
+expect_out "says when that version was already installed" "already installed"
+
+new_sandbox; make_release v0.3.0 $TARGET
+mkdir -p "$SB/other"; printf '#!/bin/sh\necho "comms 0.1.0"\n' >"$SB/other/comms"; chmod 755 "$SB/other/comms"
+run_install FAKE_LATEST=v0.3.0 PATH="$SB/other:$SB/bin"
+expect_out "warns when another comms comes first on PATH" "your shell runs $SB/other/comms"
+
 echo "prebuilt binary: things that go wrong"
 new_sandbox; make_release v1.0.0 $TARGET corrupt
 run_install FAKE_LATEST=v1.0.0

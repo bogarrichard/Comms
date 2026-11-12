@@ -106,6 +106,13 @@ install_binary() {
   "$src/comms" --version >/dev/null 2>&1 || die "the downloaded binary does not run on this system"
 
   mkdir -p "$BIN_DIR" || die "cannot create $BIN_DIR"
+  # What is installed now, for the "updated" message ("comms 0.2.0" -> "0.2.0").
+  old=""
+  if [ -x "$BIN_DIR/comms" ]; then
+    old=$("$BIN_DIR/comms" --version 2>/dev/null || true)
+    old=${old##* }
+    old=${old#v}
+  fi
   # Copy under a temporary name, then rename: safe even while an old comms is running.
   if ! cp "$src/comms" "$BIN_DIR/.comms.new" || ! mv -f "$BIN_DIR/.comms.new" "$BIN_DIR/comms"; then
     rm -f "$BIN_DIR/.comms.new"
@@ -117,7 +124,18 @@ install_binary() {
     cp -R "$src/scripts" "$DATA_DIR/scripts"
   fi
 
-  say "installed comms $tag: $BIN_DIR/comms"
+  if [ -z "$old" ]; then
+    say "installed comms $tag: $BIN_DIR/comms"
+  elif [ "$old" = "${tag#v}" ]; then
+    say "comms $tag was already installed; reinstalled it: $BIN_DIR/comms"
+  else
+    say "updated comms $old -> ${tag#v}: $BIN_DIR/comms"
+  fi
+  # An older copy earlier on PATH would keep running instead of this one.
+  first=$(command -v comms 2>/dev/null || true)
+  if [ -n "$first" ] && [ "$first" != "$BIN_DIR/comms" ]; then
+    say "warning: your shell runs $first, not the one just installed; remove it or put $BIN_DIR first on PATH"
+  fi
   [ -d "$DATA_DIR/scripts" ] && say "setup script: python3 $DATA_DIR/scripts/configure.py"
   path_hint "$BIN_DIR"
   next_steps

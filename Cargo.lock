@@ -528,7 +528,7 @@ dependencies = [
 
 [[package]]
 name = "comms-app"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -544,7 +544,7 @@ dependencies = [
 
 [[package]]
 name = "comms-auth"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "apple-native-keyring-store",
  "async-trait",
@@ -567,7 +567,7 @@ dependencies = [
 
 [[package]]
 name = "comms-bootstrap"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -597,7 +597,7 @@ dependencies = [
 
 [[package]]
 name = "comms-domain"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "serde",
@@ -608,7 +608,7 @@ dependencies = [
 
 [[package]]
 name = "comms-provider-api"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -619,7 +619,7 @@ dependencies = [
 
 [[package]]
 name = "comms-provider-msgraph"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -637,7 +637,7 @@ dependencies = [
 
 [[package]]
 name = "comms-provider-signal"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -653,7 +653,7 @@ dependencies = [
 
 [[package]]
 name = "comms-provider-slack"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -671,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "comms-storage"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "comms-domain",
@@ -686,7 +686,7 @@ dependencies = [
 
 [[package]]
 name = "comms-testkit"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -697,7 +697,7 @@ dependencies = [
 
 [[package]]
 name = "comms-tui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
