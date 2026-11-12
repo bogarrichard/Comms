@@ -24,7 +24,9 @@ use comms_storage::Store;
 use comms_testkit::FakeProvider;
 use std::sync::Arc;
 
-pub use settings::{Backend, ChannelAccess, Paths, Settings, SignalSettings, SlackSettings};
+pub use settings::{
+    Backend, ChannelAccess, Paths, Settings, SignalSettings, SlackChannels, SlackSettings,
+};
 #[cfg(feature = "signal")]
 pub use signal::{signal_link, start_signal, valid_signal_account};
 #[cfg(feature = "slack")]

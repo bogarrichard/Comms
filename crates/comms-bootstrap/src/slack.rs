@@ -29,7 +29,8 @@ pub async fn start_slack(settings: &Settings) -> Result<AppHandle> {
     let store = Store::open(&paths.database)
         .await
         .context("opening the local database")?;
-    let provider = SlackProvider::new(token)?;
+    let provider = SlackProvider::new(token)?
+        .member_only(settings.slack.channels == crate::SlackChannels::Member);
     Ok(AppHandle::start(Arc::new(provider), store, core_config(settings)).await?)
 }
 

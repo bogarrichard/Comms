@@ -116,8 +116,9 @@ async fn lists_chats_with_resolved_names_and_a_cursor() {
 #[tokio::test]
 async fn lists_channels_and_an_empty_cursor_ends_paging() {
     let (server, p) = setup().await;
+    // Member-only is the default, so channels come from users.conversations.
     Mock::given(method("POST"))
-        .and(path("/api/conversations.list"))
+        .and(path("/api/users.conversations"))
         .and(body_string_contains(
             "types=public_channel%2Cprivate_channel",
         ))
@@ -443,4 +444,89 @@ async fn team_info_without_the_scope_says_which_one_is_missing() {
     .await;
     let err = provider.workspace().await.unwrap_err();
     assert!(err.to_string().contains("team:read"), "{err}");
+}
+
+#[tokio::test]
+async fn channels_come_from_users_conversations_unless_all_are_wanted() {
+    let (server, provider) = setup().await;
+    answer(
+        &server,
+        "users.conversations",
+        json!({"ok": true, "channels": [{"id": "C1", "name": "joined"}]}),
+    )
+    .await;
+    answer(
+        &server,
+        "conversations.list",
+        json!({"ok": true, "channels": [{"id": "C1", "name": "joined"}, {"id": "C2", "name": "other"}]}),
+    )
+    .await;
+    let page = provider
+        .list_conversations(ConversationClass::Channels, PageRequest::first(0))
+        .await
+        .unwrap();
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].title, "#joined");
+
+    let all = SlackProvider::with_base_url(TOKEN, &format!("{}/api", server.uri()))
+        .unwrap()
+        .member_only(false);
+    let page = all
+        .list_conversations(ConversationClass::Channels, PageRequest::first(0))
+        .await
+        .unwrap();
+    assert_eq!(page.items.len(), 2);
+}
+
+#[tokio::test]
+async fn chats_carry_the_time_of_their_latest_message_and_it_is_cached() {
+    let (server, provider) = setup().await;
+    answer(
+        &server,
+        "conversations.list",
+        json!({"ok": true, "channels": [
+            {"id": "D1", "is_im": true, "user": "U1"},
+            {"id": "D2", "is_im": true, "user": "U2"}
+        ]}),
+    )
+    .await;
+    user(&server, "U1", "Ada").await;
+    user(&server, "U2", "Bob").await;
+    for (chan, ts) in [("D1", "1700000000.000100"), ("D2", "1700009999.000100")] {
+        Mock::given(method("POST"))
+            .and(path("/api/conversations.history"))
+            .and(body_string_contains(format!("channel={chan}").as_str()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "ok": true, "messages": [{"ts": ts, "user": "U1", "text": "hi"}]
+            })))
+            .mount(&server)
+            .await;
+    }
+    let list = || async {
+        provider
+            .list_conversations(ConversationClass::Chats, PageRequest::first(0))
+            .await
+            .unwrap()
+            .items
+    };
+    let items = list().await;
+    let at = |id: &str| {
+        items
+            .iter()
+            .find(|c| c.remote_id.as_str() == id)
+            .unwrap()
+            .last_activity
+            .unwrap()
+    };
+    assert!(at("D2") > at("D1"));
+
+    let _ = list().await;
+    let history_calls = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.url.path() == "/api/conversations.history")
+        .count();
+    assert_eq!(history_calls, 2, "a second listing must use the cache");
 }

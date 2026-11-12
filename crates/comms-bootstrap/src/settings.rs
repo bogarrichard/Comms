@@ -43,12 +43,25 @@ pub struct SlackSettings {
     /// A Slack *user* token (`xoxp-...`). Prefer `COMMS_SLACK_TOKEN` so the
     /// secret stays out of the config file.
     pub token: Option<String>,
+    /// Which channels to list: `member` (default, only the ones you joined)
+    /// or `all` (every public channel in the workspace as well).
+    pub channels: SlackChannels,
+}
+
+/// The `[slack] channels` choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SlackChannels {
+    #[default]
+    Member,
+    All,
 }
 
 impl std::fmt::Debug for SlackSettings {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SlackSettings")
             .field("token", &self.token.as_ref().map(|_| "<redacted>"))
+            .field("channels", &self.channels)
             .finish()
     }
 }
@@ -181,6 +194,14 @@ impl Settings {
         if let Some(v) = get("COMMS_SLACK_TOKEN").filter(|v| !v.trim().is_empty()) {
             self.slack.token = Some(v.trim().to_owned());
         }
+        match get("COMMS_SLACK_CHANNELS")
+            .map(|v| v.trim().to_lowercase())
+            .as_deref()
+        {
+            Some("member") => self.slack.channels = SlackChannels::Member,
+            Some("all") => self.slack.channels = SlackChannels::All,
+            _ => {}
+        }
         if let Some(v) = get("COMMS_SIGNAL_ACCOUNT").filter(|v| !v.trim().is_empty()) {
             self.signal.account = Some(v.trim().to_owned());
         }
@@ -247,6 +268,19 @@ mod tests {
         assert_eq!(s.poll.open_secs, 20);
         assert_eq!(s.poll.chats_secs, 60);
         assert_eq!(s.keys["quit"], ["q", "ctrl+c"]);
+    }
+
+    #[test]
+    fn slack_lists_only_joined_channels_unless_told_otherwise() {
+        assert_eq!(
+            Settings::parse("").unwrap().slack.channels,
+            SlackChannels::Member
+        );
+        let s = Settings::parse("[slack]\nchannels = \"all\"").unwrap();
+        assert_eq!(s.slack.channels, SlackChannels::All);
+        let mut s = Settings::default();
+        s.apply_env(|k| (k == "COMMS_SLACK_CHANNELS").then(|| "ALL".to_owned()));
+        assert_eq!(s.slack.channels, SlackChannels::All);
     }
 
     #[test]

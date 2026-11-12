@@ -653,6 +653,7 @@ dependencies = [
  "chrono",
  "comms-domain",
  "comms-provider-api",
+ "futures",
  "reqwest",
  "serde",
  "serde_json",

@@ -18,8 +18,10 @@ mod mrkdwn;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use comms_domain::{
     ContentBlock, ConversationKind, PageCursor, Participant, ProviderKind, RemoteId,
 };
@@ -27,6 +29,7 @@ use comms_provider_api::{
     Capabilities, ConversationClass, MessagingProvider, OutgoingMessage, Page, PageRequest,
     ProviderError, RemoteConversation, RemoteMessage,
 };
+use futures::StreamExt;
 use tokio::sync::OnceCell;
 use tracing::warn;
 
@@ -37,6 +40,14 @@ use model::{
 };
 
 pub const PROVIDER_KIND: &str = "slack";
+
+/// A chat's last-message time is re-read from Slack at most this often
+/// (new messages in the open chat are seen through its own polling).
+const ACTIVITY_TTL: Duration = Duration::from_secs(300);
+/// Chat id to (when it was looked up, time of its latest message).
+type ActivityCache = Mutex<HashMap<String, (Instant, Option<DateTime<Utc>>)>>;
+/// Parallel "latest message" lookups when ordering chats.
+const ACTIVITY_LOOKUPS: usize = 4;
 
 /// Slack tokens start with `xox` (`xoxp-` user, `xoxb-` bot).
 pub fn looks_like_token(s: &str) -> bool {
@@ -73,6 +84,9 @@ pub struct SlackProvider {
     me: OnceCell<Participant>,
     /// user id to display name; only successful lookups are stored.
     users: Mutex<HashMap<String, String>>,
+    /// Only list channels you are a member of (`users.conversations`).
+    member_only: bool,
+    activity: ActivityCache,
 }
 
 impl SlackProvider {
@@ -105,7 +119,44 @@ impl SlackProvider {
             client: SlackClient::new(base, token.into().trim().to_owned())?,
             me: OnceCell::new(),
             users: Mutex::new(HashMap::new()),
+            member_only: true,
+            activity: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// `true` (the default): list only the channels you have joined.
+    /// `false`: every public channel in the workspace plus your private ones.
+    #[must_use]
+    pub fn member_only(mut self, member_only: bool) -> Self {
+        self.member_only = member_only;
+        self
+    }
+
+    /// Time of the newest message in `id`, cached for [`ACTIVITY_TTL`]. Slack's
+    /// list calls carry no activity time, and chats must be ordered by it.
+    async fn latest_activity(&self, id: &str) -> Option<DateTime<Utc>> {
+        let cached = self.activity.lock().ok().and_then(|m| m.get(id).cloned());
+        if let Some((at, value)) = cached
+            && at.elapsed() < ACTIVITY_TTL
+        {
+            return value;
+        }
+        let found = match self
+            .client
+            .call::<History>("conversations.history", &[("channel", id), ("limit", "1")])
+            .await
+        {
+            Ok(h) => h.messages.first().and_then(|m| parse_ts(&m.ts)),
+            Err(e) => {
+                warn!("latest message of a chat not read: {e}");
+                // Keep what we knew; try again next time.
+                return cached_value(&self.activity, id);
+            }
+        };
+        if let Ok(mut m) = self.activity.lock() {
+            m.insert(id.to_owned(), (Instant::now(), found));
+        }
+        found
     }
 
     fn cached_name(&self, id: &str) -> Option<String> {
@@ -215,6 +266,13 @@ impl SlackProvider {
 }
 
 /// Slack accepts at most 200 for list-style calls we make; 0 means default.
+fn cached_value(cache: &ActivityCache, id: &str) -> Option<DateTime<Utc>> {
+    cache
+        .lock()
+        .ok()
+        .and_then(|m| m.get(id).and_then(|(_, v)| *v))
+}
+
 fn page_limit(page: &PageRequest) -> String {
     let limit = if page.limit == 0 { 100 } else { page.limit };
     limit.clamp(1, 200).to_string()
@@ -272,10 +330,28 @@ impl MessagingProvider for SlackProvider {
         if let Some(c) = page.cursor.as_ref() {
             params.push(("cursor", c.as_str()));
         }
-        let list: ConversationsList = self.client.call("conversations.list", &params).await?;
+        // `users.conversations` lists only what you are in; chats always are.
+        let api = if class == ConversationClass::Channels && self.member_only {
+            "users.conversations"
+        } else {
+            "conversations.list"
+        };
+        let list: ConversationsList = self.client.call(api, &params).await?;
         let mut items = Vec::with_capacity(list.channels.len());
         for ch in list.channels {
             items.push(self.conversation(ch).await);
+        }
+        if class == ConversationClass::Chats {
+            // Newest chats first needs each chat's latest message time.
+            let ids: Vec<String> = items.iter().map(|c| c.remote_id.to_string()).collect();
+            let times: Vec<Option<DateTime<Utc>>> = futures::stream::iter(ids)
+                .map(|id| async move { self.latest_activity(&id).await })
+                .buffered(ACTIVITY_LOOKUPS)
+                .collect()
+                .await;
+            for (c, t) in items.iter_mut().zip(times) {
+                c.last_activity = t;
+            }
         }
         Ok(Page {
             items,

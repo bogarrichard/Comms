@@ -14,6 +14,7 @@ comms-domain.workspace = true
 comms-provider-api.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
+futures.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
