@@ -1,5 +1,9 @@
 # Using Comms with Signal
 
+:::{warning}
+**Status: experimental.** Text only, and **not yet run against a live `signal-cli`**: the integration is implemented from `signal-cli`'s documentation and tested against a fake. Your first run is the first live test.
+:::
+
 Comms links to your Signal account as a **secondary device**, exactly like Signal Desktop, using [signal-cli](https://github.com/AsamK/signal-cli) (a separate program, GPL-3.0, started by Comms as a child process). Your phone stays the primary device.
 
 **Text only for now.** Attachments appear as `[attachment: name]`; reactions, edits, deletions, typing indicators and read receipts you send are not supported.

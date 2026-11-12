@@ -1,5 +1,9 @@
 # Using Comms with Slack
 
+:::{note}
+**Status: early, tested by the author.** Listing conversations, reading and sending messages were verified on a real workspace. Not yet verified, or not implemented: the workspace icon in a real session, edit and delete on real Slack, thread replies (not loaded), unread markers and files (shown as `[file: name]`).
+:::
+
 Comms talks to the Slack Web API with a **user token** (`xoxp-...`), so it reads and posts as you. Slack has no "log in with a password" for third-party clients: every client needs a Slack *app*, and the app is what Slack issues the token for. For a lab or team, one person creates the app once; everyone else installs it to get their own token.
 
 :::{note}
@@ -89,6 +93,15 @@ The workspace tile shows your workspace's own icon when the terminal can display
 Try it without a Slack account: `comms --demo-slack`.
 
 Not yet: replying inside a thread (the pane is read-only), and the real Slack provider does not load thread replies yet (`conversations.replies`), so threads are only populated in the demo for now. Without `team:read` (or a custom icon) the tile shows the first letter of the workspace name.
+
+## Settings
+
+| Setting | Effect |
+|---|---|
+| `[slack] channels = "member"` (default) | list only the channels you have joined (`users.conversations`) |
+| `[slack] channels = "all"` | also list every public channel in the workspace (`COMMS_SLACK_CHANNELS=member\|all`) |
+
+Chats are listed with the newest activity first. Slack's list calls carry no activity time, so Comms reads each chat's latest message, four at a time, and caches the answer for five minutes.
 
 ## Troubleshooting
 

@@ -36,11 +36,12 @@ The demo runs on fake data. Press `?` for the key bindings (vim-style: `j`/`k`, 
 
 ## Connect a real service
 
-Comms talks to one service at a time, chosen with `provider` in the config file (`comms paths` shows where it is).
+Comms talks to one service at a time, chosen with `provider` (`teams`, `signal` or `slack`) in the config file (`comms paths` shows where it is).
 
 | Service | Colour | Setup |
 |---|---|---|
-| Microsoft Teams | purple | Register an Entra application once, then sign in with your browser: {doc}`setup-entra` |
+| Slack | green | Create a Slack app, then `comms slack-login`: {doc}`slack` |
+| Microsoft Teams | purple | Register an Entra application once, then sign in with your browser: {doc}`teams` |
 | Signal | blue | Link Comms as a secondary device through `signal-cli`: {doc}`signal` |
 
 The setup questionnaire writes the Teams part of the config for you:
