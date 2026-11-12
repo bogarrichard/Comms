@@ -9,6 +9,7 @@ A fast, keyboard-driven terminal client for **Microsoft Teams** (chats and team 
 getting-started
 setup-entra
 signal
+slack
 ```
 
 ```{toctree}

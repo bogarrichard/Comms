@@ -9,6 +9,8 @@ cargo run -p comms-tui -- --demo
 
 * Rust stable ≥ 1.94 (set by `sqlx`). SQLite is bundled (FTS5 available); first build compiles it and needs a C compiler and cmake (rustls/aws-lc).
 * The Signal provider is tested against an in-memory fake `signal-cli` (`crates/comms-provider-signal/src/tests.rs`); no Signal account or `signal-cli` is needed.
+* The Slack provider is tested with `wiremock` standing in for `slack.com/api`; no Slack workspace or token is needed.
+* Backends are Cargo features of `comms-tui` / `comms-bootstrap`. Build a subset with `cargo build -p comms-tui --no-default-features --features slack`; CI-style check of the combinations: `cargo check -p comms-tui --no-default-features --features teams` (and `signal`, `slack`, or none).
 * Tests use `wiremock` for HTTP, `Store::open_in_memory`, and `comms-testkit::FakeProvider`. TUI tests render to ratatui's `TestBackend`.
 * `COMMS_CONFIG_DIR` / `COMMS_DATA_DIR` redirect config and cache; `COMMS_LOG=debug` raises the log level (log file, never the terminal).
 * Dependency policy: permissive licenses only (`deny.toml`). GPL/Slint licences are excluded until the GUI licensing decision.

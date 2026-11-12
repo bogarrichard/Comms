@@ -8,6 +8,7 @@ apps/comms-tui ──► comms-bootstrap ──► comms-app ──► comms-sto
                          ├──► comms-provider-api ◄── comms-testkit (fake provider / demo)
                          ├──► comms-provider-msgraph  (the only crate that knows Graph)
                          ├──► comms-provider-signal   (the only crate that knows signal-cli)
+                         ├──► comms-provider-slack    (the only crate that knows the Slack Web API)
                          └──► comms-auth              (OAuth2 PKCE / device code, keyring)
 ```
 
@@ -15,10 +16,11 @@ apps/comms-tui ──► comms-bootstrap ──► comms-app ──► comms-sto
 * **comms-provider-api** – `MessagingProvider` trait, `Capabilities`, paging, `ProviderError` with `request_not_applied()` (is a retry provably safe?).
 * **comms-provider-msgraph** – documented v1.0 delegated endpoints, HTML→`ContentBlock`, throttling (`Retry-After`, backoff), pagination links restricted to the Graph host.
 * **comms-provider-signal** – talks JSON-RPC to a `signal-cli jsonRpc` child process (no Signal protocol code or AGPL dependency is linked in). Signal pushes messages and keeps no history for linked devices, while the core polls, so the crate buffers what it receives (`inbox.rs`, also appended to a private file) and serves it through `get_messages`. A `send` that gets an error answer is `failed` (safe to retry); no answer is `uncertain`.
+* **comms-provider-slack** – Slack Web API with a user token (`xoxp-`): `conversations.*`, `chat.*`, `users.info`. Slack reports errors as `{"ok": false, "error": ...}` with HTTP 200, so the client maps each code to a `ProviderError` whose `request_not_applied()` is only true when the request provably did nothing; unknown codes count as ambiguous. mrkdwn becomes `ContentBlock`s. Polling only; nothing is retried inside the crate.
 * **comms-storage** – schema/migrations, duplicate prevention by `(conversation, remote_id)`, edit/delete updates, adoption of locally-sent messages whose outcome was uncertain.
 * **comms-app** – the engine. Frontends send `Command`s, subscribe to `AppEvent`s, and read from the local cache via `AppHandle` queries. Polling, pagination/backfill and the send state machine live here.
-* **comms-bootstrap** – settings, paths, builds Graph or demo backends.
-* **comms-tui** – rendering and keys only. `theme.rs` gives each backend an accent colour (Signal blue, Teams purple) chosen from `AppHandle::provider_kind()`.
+* **comms-bootstrap** – settings, paths, builds the Graph, Signal, Slack or demo backend. Each backend is a Cargo feature (`teams`, `signal`, `slack`, all default); a build without one refuses to start it with a clear message.
+* **comms-tui** – rendering and keys only. `theme.rs` gives each backend an accent colour (Signal blue, Teams purple, Slack yellow) chosen from `AppHandle::provider_kind()`.
 
 ## Sharing the core between Ratatui and Slint
 
