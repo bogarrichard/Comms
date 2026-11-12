@@ -17,6 +17,14 @@ ignore = [
   { id = "RUSTSEC-2026-0370", reason = "zvariant folded into zbus; informational" },
   { id = "RUSTSEC-2026-0371", reason = "zbus_names folded into zbus; informational" },
   { id = "RUSTSEC-2026-0372", reason = "zvariant_derive folded into zbus; informational" },
+  # Reviewed 2026-11-12: bundled SQLite < 3.54 can return uninitialised memory when
+  # a database is opened together with a crafted sibling -wal file (local, needs the
+  # victim to open attacker-written files). Comms only opens its own cache, in a data
+  # directory it creates with mode 0700 and a database with mode 0600, so nobody but
+  # the user can plant files there. sqlx 0.9.0 (the latest) caps libsqlite3-sys below
+  # 0.38 and the fix is in 0.39: REMOVE this entry and run `cargo update -p
+  # libsqlite3-sys` as soon as a sqlx release allows it.
+  { id = "RUSTSEC-2026-0459", reason = "needs attacker-written db+wal files in a 0700 dir; fix blocked by sqlx's <0.38 cap" },
 ]
 
 [bans]

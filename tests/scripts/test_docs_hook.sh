@@ -26,6 +26,8 @@ new_repo() {
   printf '# x\n' >"$REPO/docs/index.md"
   printf 'fn main() {}\n' >"$REPO/src/main.rs"
   printf '[workspace.package]\nversion = "0.1.0"\n' >"$REPO/Cargo.toml"
+  # The single quotes are deliberate: $* and ${SPHINX_RC} belong to the generated stub.
+  # shellcheck disable=SC2016
   printf '#!/bin/sh\necho "$*" >>"%s/sphinx.log"\nexit "${SPHINX_RC:-0}"\n' "$REPO" >"$REPO/bin/sphinx-build"
   chmod +x "$REPO/bin/sphinx-build"
   git -C "$REPO" add -A
