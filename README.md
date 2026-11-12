@@ -1,6 +1,10 @@
+<p align="center">
+  <img src="docs/_static/logo.png" alt="Comms logo" width="128">
+</p>
+
 # Comms
 
-A fast, keyboard-driven, native terminal client for **Microsoft Teams** (chats and team channels) and **Signal** (text), built in Rust on a provider-independent core. Each connection has its own colour: Teams is purple, Signal is blue.
+A fast, keyboard-driven, native terminal client for **Microsoft Teams** (chats and team channels), **Signal** (text) and **Slack**, built in Rust on a provider-independent core. Each connection has its own colour: Teams is purple, Signal is blue, Slack is green.
 
 > **Status: early.** The TUI works end to end against mocked Microsoft Graph responses and a built-in demo backend. It has **not yet been run against a live tenant** — your first sign-in is the first live test. See [Known limitations](#known-limitations).
 

@@ -35,6 +35,9 @@ myst_enable_extensions = ["colon_fence"]
 myst_heading_anchors = 3
 
 html_theme = "furo"
+html_static_path = ["_static"]
+html_logo = "_static/logo.png"
+html_favicon = "_static/logo-32.png"
 html_title = f"Comms {release}"
 html_theme_options = {
     "source_repository": "https://github.com/bogarrichard/Comms/",
