@@ -15,6 +15,7 @@
 mod client;
 mod model;
 mod mrkdwn;
+pub mod oauth;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -407,7 +408,13 @@ impl MessagingProvider for SlackProvider {
             .client
             .call(
                 "chat.postMessage",
-                &[("channel", conversation.as_str()), ("text", &message.text)],
+                &[
+                    ("channel", conversation.as_str()),
+                    ("text", &message.text),
+                    // Without this Slack attributes the post to the *app*
+                    // ("Comms", with an APP tag) instead of to you.
+                    ("as_user", "true"),
+                ],
             )
             .await?;
         let mut msg = posted.message.unwrap_or_else(|| SMessage {

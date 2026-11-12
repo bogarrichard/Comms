@@ -17,6 +17,26 @@ pub enum Backend {
     Slack,
 }
 
+impl Backend {
+    /// The name used in the config file and for `:switch`.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Backend::Teams => "teams",
+            Backend::Signal => "signal",
+            Backend::Slack => "slack",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.trim().to_lowercase().as_str() {
+            "teams" => Some(Backend::Teams),
+            "signal" => Some(Backend::Signal),
+            "slack" => Some(Backend::Slack),
+            _ => None,
+        }
+    }
+}
+
 /// The `[signal]` table.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -43,6 +63,10 @@ pub struct SlackSettings {
     /// A Slack *user* token (`xoxp-...`). Prefer `COMMS_SLACK_TOKEN` so the
     /// secret stays out of the config file.
     pub token: Option<String>,
+    /// The Slack app's Client ID (Basic Information). With it, `comms
+    /// slack-login` signs in through the browser instead of asking for a
+    /// pasted token. It is public, not a secret.
+    pub client_id: Option<String>,
     /// Which channels to list: `member` (default, only the ones you joined)
     /// or `all` (every public channel in the workspace as well).
     pub channels: SlackChannels,
@@ -61,6 +85,7 @@ impl std::fmt::Debug for SlackSettings {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SlackSettings")
             .field("token", &self.token.as_ref().map(|_| "<redacted>"))
+            .field("client_id", &self.client_id)
             .field("channels", &self.channels)
             .finish()
     }
@@ -194,6 +219,9 @@ impl Settings {
         if let Some(v) = get("COMMS_SLACK_TOKEN").filter(|v| !v.trim().is_empty()) {
             self.slack.token = Some(v.trim().to_owned());
         }
+        if let Some(v) = get("COMMS_SLACK_CLIENT_ID").filter(|v| !v.trim().is_empty()) {
+            self.slack.client_id = Some(v.trim().to_owned());
+        }
         match get("COMMS_SLACK_CHANNELS")
             .map(|v| v.trim().to_lowercase())
             .as_deref()
@@ -268,6 +296,15 @@ mod tests {
         assert_eq!(s.poll.open_secs, 20);
         assert_eq!(s.poll.chats_secs, 60);
         assert_eq!(s.keys["quit"], ["q", "ctrl+c"]);
+    }
+
+    #[test]
+    fn backends_round_trip_through_their_names() {
+        for b in [Backend::Teams, Backend::Signal, Backend::Slack] {
+            assert_eq!(Backend::from_name(b.name()), Some(b));
+        }
+        assert_eq!(Backend::from_name(" Slack "), Some(Backend::Slack));
+        assert_eq!(Backend::from_name("irc"), None);
     }
 
     #[test]

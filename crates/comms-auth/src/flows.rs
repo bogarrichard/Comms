@@ -122,7 +122,7 @@ fn into_tokens(body: serde_json::Value) -> Result<Tokens, AuthError> {
     })
 }
 
-fn random_urlsafe(bytes: usize) -> Result<String, AuthError> {
+pub(crate) fn random_urlsafe(bytes: usize) -> Result<String, AuthError> {
     let mut buf = vec![0u8; bytes];
     getrandom::fill(&mut buf)
         .map_err(|e| AuthError::Config(format!("no secure randomness: {e}")))?;
@@ -225,7 +225,10 @@ pub(crate) async fn browser_login(
     into_tokens(body)
 }
 
-async fn wait_for_redirect(listener: &TcpListener, state: &str) -> Result<String, AuthError> {
+pub(crate) async fn wait_for_redirect(
+    listener: &TcpListener,
+    state: &str,
+) -> Result<String, AuthError> {
     loop {
         let (mut sock, _) = listener
             .accept()

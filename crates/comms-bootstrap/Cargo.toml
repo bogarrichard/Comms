@@ -14,7 +14,7 @@ default = ["teams", "signal", "slack"]
 # One feature per backend; a build without one refuses to start it.
 teams = ["dep:comms-auth", "dep:comms-provider-msgraph"]
 signal = ["dep:comms-provider-signal"]
-slack = ["dep:comms-provider-slack"]
+slack = ["dep:comms-provider-slack", "dep:comms-auth"]
 
 [dependencies]
 comms-app.workspace = true
@@ -30,6 +30,7 @@ anyhow.workspace = true
 directories.workspace = true
 serde.workspace = true
 toml.workspace = true
+url.workspace = true
 toml_edit.workspace = true
 tokio.workspace = true
 tracing.workspace = true
@@ -37,3 +38,8 @@ async-trait.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+wiremock.workspace = true
+reqwest.workspace = true
+sha2.workspace = true
+base64.workspace = true
+serde_json.workspace = true

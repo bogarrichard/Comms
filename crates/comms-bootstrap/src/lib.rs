@@ -7,6 +7,8 @@
 //! default). A build without one still understands its settings but refuses to
 //! start it with a message saying so.
 
+#[cfg(any(feature = "teams", feature = "slack"))]
+mod browser;
 mod settings;
 #[cfg(feature = "signal")]
 mod signal;
@@ -24,17 +26,17 @@ use comms_storage::Store;
 use comms_testkit::FakeProvider;
 use std::sync::Arc;
 
+#[cfg(any(feature = "teams", feature = "slack"))]
+pub use browser::open_in_browser;
 pub use settings::{
     Backend, ChannelAccess, Paths, Settings, SignalSettings, SlackChannels, SlackSettings,
 };
 #[cfg(feature = "signal")]
 pub use signal::{signal_link, start_signal, valid_signal_account};
 #[cfg(feature = "slack")]
-pub use slack::{save_slack_token, slack_login, slack_workspace, start_slack};
+pub use slack::{save_slack_token, slack_login, slack_login_browser, slack_workspace, start_slack};
 #[cfg(feature = "teams")]
-pub use teams::{
-    explain_auth_error, login, make_session, open_in_browser, start_graph, start_teams, teams_login,
-};
+pub use teams::{explain_auth_error, login, make_session, start_graph, start_teams, teams_login};
 
 /// What the frontend shows for the workspace: its name and an optional icon
 /// (PNG or JPEG bytes).
@@ -160,6 +162,12 @@ pub async fn signal_link(_settings: &Settings, _say: impl Fn(&str)) -> Result<()
 /// `comms slack-login`: verify a pasted token and store it.
 #[cfg(not(feature = "slack"))]
 pub async fn slack_login(_token: &str) -> Result<String> {
+    Err(not_compiled("Slack", "slack"))
+}
+
+/// `comms slack-login` through the browser.
+#[cfg(not(feature = "slack"))]
+pub async fn slack_login_browser(_settings: &Settings, _say: impl Fn(&str)) -> Result<String> {
     Err(not_compiled("Slack", "slack"))
 }
 

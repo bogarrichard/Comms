@@ -207,6 +207,8 @@ async fn send_posts_the_text_as_the_user_and_returns_the_message() {
         .and(path("/api/chat.postMessage"))
         .and(body_string_contains("channel=C1"))
         .and(body_string_contains("text=hello+world"))
+        // Posted as the user, not as the app.
+        .and(body_string_contains("as_user=true"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "ok": true, "channel": "C1", "ts": "1700000005.000200",
             "message": {"ts": "1700000005.000200", "text": "hello world"}
@@ -529,4 +531,77 @@ async fn chats_carry_the_time_of_their_latest_message_and_it_is_cached() {
         .filter(|r| r.url.path() == "/api/conversations.history")
         .count();
     assert_eq!(history_calls, 2, "a second listing must use the cache");
+}
+
+#[test]
+fn the_authorize_link_carries_pkce_and_the_user_scopes_but_no_secret() {
+    let url = crate::oauth::authorize_url("111.222", "http://localhost:8765/callback", "st", "ch");
+    let parsed = url::Url::parse(&url).unwrap();
+    let q: std::collections::HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+    assert_eq!(q["client_id"], "111.222");
+    assert_eq!(q["code_challenge"], "ch");
+    assert_eq!(q["code_challenge_method"], "S256");
+    assert_eq!(q["state"], "st");
+    assert_eq!(q["redirect_uri"], "http://localhost:8765/callback");
+    assert!(q["user_scope"].contains("chat:write") && q["user_scope"].contains("team:read"));
+    assert!(!q.contains_key("client_secret") && !q.contains_key("scope"));
+}
+
+#[tokio::test]
+async fn a_code_is_exchanged_for_the_user_token_without_a_client_secret() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/oauth.v2.access"))
+        .and(body_string_contains("code=abc"))
+        .and(body_string_contains("code_verifier=ver"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "ok": true,
+            "authed_user": {"id": "U1", "access_token": "xoxp-user-token-123", "token_type": "user"}
+        })))
+        .mount(&server)
+        .await;
+    let token = crate::oauth::exchange_code(
+        &format!("{}/api", server.uri()),
+        "111.222",
+        "abc",
+        "http://localhost:8765/callback",
+        "ver",
+    )
+    .await
+    .unwrap();
+    assert_eq!(token, "xoxp-user-token-123");
+    let body =
+        String::from_utf8(server.received_requests().await.unwrap()[0].body.clone()).unwrap();
+    assert!(!body.contains("client_secret"), "{body}");
+}
+
+#[tokio::test]
+async fn a_refused_code_or_a_bot_only_answer_is_an_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/oauth.v2.access"))
+        .and(body_string_contains("code=bad"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"ok": false, "error": "invalid_code"})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/oauth.v2.access"))
+        .and(body_string_contains("code=bot"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            json!({"ok": true, "access_token": "xoxb-1234567890", "authed_user": {"id": "U1"}}),
+        ))
+        .mount(&server)
+        .await;
+    let base = format!("{}/api", server.uri());
+    let r = "http://localhost:8765/callback";
+    let err = crate::oauth::exchange_code(&base, "1.2", "bad", r, "v")
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("invalid_code"), "{err}");
+    let err = crate::oauth::exchange_code(&base, "1.2", "bot", r, "v")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ProviderError::InvalidResponse(_)), "{err}");
 }

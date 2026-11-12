@@ -460,3 +460,19 @@ fn well_known_entra_errors_get_actionable_hints() {
     );
     assert!(e("something else").hint().is_none());
 }
+
+#[tokio::test]
+async fn the_loopback_listener_is_only_reachable_from_this_machine() {
+    let listener = crate::loopback::bind(0).await.unwrap();
+    assert!(listener.local_addr().unwrap().ip().is_loopback());
+}
+
+#[test]
+fn pkce_values_are_long_random_and_different_each_time() {
+    let a = crate::loopback::Pkce::new().unwrap();
+    let b = crate::loopback::Pkce::new().unwrap();
+    assert!(a.verifier.len() >= 43 && a.state.len() >= 16);
+    assert_ne!(a.verifier, b.verifier);
+    assert_ne!(a.state, b.state);
+    assert_ne!(a.verifier, a.challenge);
+}

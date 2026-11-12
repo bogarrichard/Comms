@@ -571,6 +571,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "comms-app",
  "comms-auth",
  "comms-domain",
@@ -581,12 +582,17 @@ dependencies = [
  "comms-storage",
  "comms-testkit",
  "directories",
+ "reqwest",
  "serde",
+ "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
  "toml",
  "toml_edit",
  "tracing",
+ "url",
+ "wiremock",
 ]
 
 [[package]]

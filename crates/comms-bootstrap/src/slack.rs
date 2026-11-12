@@ -111,6 +111,82 @@ pub fn save_slack_token(config_file: &Path, token: &str) -> Result<()> {
     Ok(())
 }
 
+/// The port of the redirect URL registered in the Slack app
+/// (`http://localhost:8765/callback`).
+const REDIRECT_PORT: u16 = 8765;
+const LOGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// A Slack Client ID looks like `1234567890.1234567890123`.
+fn valid_client_id(id: &str) -> bool {
+    let mut parts = id.split('.');
+    let digits =
+        |p: Option<&str>| p.is_some_and(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    digits(parts.next()) && digits(parts.next()) && parts.next().is_none()
+}
+
+/// Sign in through the browser (authorization code + PKCE, no client secret),
+/// then verify and store the token like [`slack_login`]. Returns your name.
+pub async fn slack_login_browser(settings: &Settings, say: impl Fn(&str)) -> Result<String> {
+    let client_id = settings.slack.client_id.clone().context(
+        "no Slack client ID configured (set [slack] client_id or COMMS_SLACK_CLIENT_ID)",
+    )?;
+    let token = browser_token(
+        comms_provider_slack::oauth::DEFAULT_API_BASE,
+        &client_id,
+        REDIRECT_PORT,
+        |url| {
+            if crate::open_in_browser(url) {
+                say("Opening your browser to sign in to Slack...");
+            } else {
+                say("Open this address in a browser to sign in to Slack:");
+            }
+            say(url);
+            say("Waiting for you to click Allow (Ctrl+C to cancel)...");
+        },
+        LOGIN_TIMEOUT,
+    )
+    .await?;
+    slack_login(&token).await
+}
+
+/// The browser round trip: listen on loopback, hand the authorize URL to
+/// `on_url`, wait for the redirect and swap the code for a token.
+async fn browser_token(
+    api_base: &str,
+    client_id: &str,
+    port: u16,
+    on_url: impl FnOnce(&str),
+    timeout: std::time::Duration,
+) -> Result<String> {
+    use comms_auth::loopback;
+    if !valid_client_id(client_id) {
+        bail!(
+            "the Slack client ID must look like 1234567890.1234567890123 (Basic Information in your app)"
+        );
+    }
+    let pkce = loopback::Pkce::new()?;
+    // Bound to 127.0.0.1 only; closed as soon as one valid answer arrives.
+    let listener = loopback::bind(port).await?;
+    let port = listener.local_addr()?.port();
+    let redirect_uri = format!("http://localhost:{port}/callback");
+    on_url(&comms_provider_slack::oauth::authorize_url(
+        client_id,
+        &redirect_uri,
+        &pkce.state,
+        &pkce.challenge,
+    ));
+    let code = loopback::wait_for_code(&listener, &pkce.state, timeout).await?;
+    drop(listener);
+    Ok(comms_provider_slack::oauth::exchange_code(
+        api_base,
+        client_id,
+        &code,
+        &redirect_uri,
+        &pkce.verifier,
+    )
+    .await?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,5 +256,116 @@ mod tests {
             !err.contains("hunter2"),
             "the token must not be echoed: {err}"
         );
+    }
+
+    use std::time::Duration;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// A fake browser: follows the authorize URL's redirect with `code=abc`
+    /// and the `state` chosen by `state_for`.
+    fn fake_browser(state_for: impl FnOnce(&str) -> String + Send + 'static) -> impl FnOnce(&str) {
+        move |auth_url| {
+            let url = url::Url::parse(auth_url).unwrap();
+            let q: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+            let target = format!(
+                "{}?code=abc&state={}",
+                q["redirect_uri"],
+                state_for(&q["state"])
+            );
+            tokio::spawn(async move {
+                let _ = reqwest::get(target).await;
+            });
+        }
+    }
+
+    async fn token_server() -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/oauth.v2.access"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "authed_user": {"id": "U1", "access_token": "xoxp-user-token-123"}
+            })))
+            .mount(&server)
+            .await;
+        server
+    }
+
+    #[tokio::test]
+    async fn browser_login_exchanges_the_code_with_a_matching_pkce_verifier() {
+        use base64::Engine;
+        use sha2::Digest;
+        let server = token_server().await;
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let seen2 = seen.clone();
+        let browser = fake_browser(|s| s.to_owned());
+        let token = browser_token(
+            &format!("{}/api", server.uri()),
+            "111.222",
+            0,
+            move |u| {
+                *seen2.lock().unwrap() = u.to_owned();
+                browser(u)
+            },
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        assert_eq!(token, "xoxp-user-token-123");
+
+        let auth = url::Url::parse(&seen.lock().unwrap()).unwrap();
+        let challenge = auth
+            .query_pairs()
+            .find(|(k, _)| k == "code_challenge")
+            .unwrap()
+            .1
+            .into_owned();
+        let body =
+            String::from_utf8(server.received_requests().await.unwrap()[0].body.clone()).unwrap();
+        let verifier = body
+            .split('&')
+            .find_map(|p| p.strip_prefix("code_verifier="))
+            .expect("the exchange carries the verifier");
+        let expected = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(sha2::Sha256::digest(verifier.as_bytes()));
+        assert_eq!(challenge, expected, "the challenge must be S256(verifier)");
+        assert!(verifier.len() >= 43, "RFC 7636 minimum length");
+        assert!(!body.contains("client_secret"));
+    }
+
+    #[tokio::test]
+    async fn a_redirect_with_the_wrong_state_is_refused_and_nothing_is_exchanged() {
+        let server = token_server().await;
+        let err = browser_token(
+            &format!("{}/api", server.uri()),
+            "111.222",
+            0,
+            fake_browser(|_| "forged".to_owned()),
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("did not match"), "{err}");
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn login_times_out_when_nobody_answers_and_checks_the_client_id() {
+        let server = token_server().await;
+        let base = format!("{}/api", server.uri());
+        let err = browser_token(&base, "111.222", 0, |_| {}, Duration::from_millis(100))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.to_lowercase().contains("time"), "{err}");
+        for bad in ["", "abc", "1.2.3", "12 34.5", "1.2&x=y"] {
+            let err = browser_token(&base, bad, 0, |_| {}, Duration::from_secs(1))
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("client ID"), "{bad}: {err}");
+        }
     }
 }

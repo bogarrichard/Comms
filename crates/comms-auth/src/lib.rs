@@ -8,6 +8,7 @@
 mod config;
 mod error;
 mod flows;
+pub mod loopback;
 mod session;
 mod store;
 
