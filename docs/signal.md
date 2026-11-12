@@ -45,3 +45,7 @@ account  = "+36201234567"   # your number, international format
 ## Not verified yet
 
 The JSON that `signal-cli` sends and expects (`receive` notifications, `send`, `listGroups`, `listContacts`) is implemented from its documentation and tested against a fake, **not yet against a live `signal-cli`**. Your first run is the first live test; if something does not show up, the details of what `signal-cli` actually sent are what is needed to fix it.
+
+---
+
+Signal is a trademark of Signal Messenger, LLC. Comms is not affiliated with or endorsed by Signal Messenger, LLC, and signal-cli is a separate project. See {doc}`trademarks`.

@@ -43,13 +43,13 @@ html_theme_options = {
     "source_repository": "https://github.com/bogarrichard/Comms/",
     "source_branch": "main",
     "source_directory": "docs/",
-    # The same purple (Teams) and blue (Signal) as the terminal client.
+    # The logo's green and blue.
     "light_css_variables": {
-        "color-brand-primary": "#7F5FD0",
-        "color-brand-content": "#3A76F0",
+        "color-brand-primary": "#1F9D6B",
+        "color-brand-content": "#1A7FB8",
     },
     "dark_css_variables": {
-        "color-brand-primary": "#A58BE6",
-        "color-brand-content": "#7BA3F7",
+        "color-brand-primary": "#2EB67D",
+        "color-brand-content": "#5BB8E6",
     },
 }

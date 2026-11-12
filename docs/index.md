@@ -33,6 +33,7 @@ microsoft-graph
 :maxdepth: 1
 
 phase-0-plan
+trademarks
 ```
 
 :::{note}

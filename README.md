@@ -50,3 +50,7 @@ One app at a time: choose it with `provider = "teams" | "signal" | "slack"` in `
 [Architecture](docs/architecture.md), [development](docs/development.md) and the [research and decisions](docs/phase-0-plan.md).
 
 License: Apache-2.0 (see `LICENSE`).
+
+## Trademarks
+
+Comms is an independent project and is not affiliated with or endorsed by Slack Technologies, LLC (a Salesforce company), Microsoft Corporation or Signal Messenger, LLC. Slack, Microsoft Teams, Microsoft Entra, Microsoft Graph and Signal are trademarks of their respective owners and are used only to name the services Comms connects to. See [docs/trademarks.md](docs/trademarks.md).

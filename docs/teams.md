@@ -37,3 +37,7 @@ Tokens live in the operating system's keyring only. If no keyring is available, 
 - The Windows and macOS keyring paths are compile-gated but untested; Linux is the primary target.
 
 More: {doc}`microsoft-graph` lists every Graph request and permission Comms uses.
+
+---
+
+Microsoft, Microsoft Teams, Microsoft Entra and Microsoft Graph are trademarks of the Microsoft group of companies. Comms is not affiliated with or endorsed by Microsoft. See {doc}`trademarks`.
